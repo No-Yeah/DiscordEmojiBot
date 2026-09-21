@@ -1,0 +1,27 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # 컨테이너 안에서의 고정 경로
+      DATABASE_URL: sqlite+aiosqlite:////app/data/emoticon.db
+      STORAGE_DIR: /app/data/images
+    volumes:
+      - emoticon-data:/app/data
+
+  # PostgreSQL로 운영할 때만 사용: 아래 주석을 풀고 bot의 DATABASE_URL을 바꾼다.
+  # DATABASE_URL: postgresql+asyncpg://emoticon:change-me@db:5432/emoticon
+  # db:
+  #   image: postgres:17
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: emoticon
+  #     POSTGRES_PASSWORD: change-me
+  #     POSTGRES_DB: emoticon
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+
+volumes:
+  emoticon-data:
+  # pgdata:

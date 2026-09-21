@@ -1,0 +1,30 @@
+# /etc/systemd/system/emoticon-bot.service
+# sudo systemctl daemon-reload && sudo systemctl enable --now emoticon-bot
+[Unit]
+Description=Discord Emoticon Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=emoticon
+Group=emoticon
+WorkingDirectory=/opt/discord-emoticon-bot
+EnvironmentFile=/opt/discord-emoticon-bot/.env
+ExecStartPre=/opt/discord-emoticon-bot/.venv/bin/alembic upgrade head
+ExecStart=/opt/discord-emoticon-bot/.venv/bin/python -m app.main
+Restart=on-failure
+RestartSec=5
+
+# 토큰과 이미지 데이터를 보호하기 위한 최소 샌드박스
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/discord-emoticon-bot/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
