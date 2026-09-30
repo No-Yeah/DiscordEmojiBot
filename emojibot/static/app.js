@@ -18,14 +18,30 @@ function toast(msg, isError) {
   setTimeout(() => el.remove(), isError ? 5000 : 2500);
 }
 
+// 저장 후 새로고침해도 펼쳐 둔 팩과 스크롤 위치를 그대로 되살린다
 function reloadWith(msg) {
-  try { sessionStorage.setItem("toast", msg); } catch (e) { /* 알림만 생략 */ }
+  try {
+    sessionStorage.setItem("toast", msg);
+    const open = [...document.querySelectorAll("tr.detail:not([hidden])")].map((r) => r.id);
+    sessionStorage.setItem("restore", JSON.stringify({ path: location.pathname + location.search, open, y: scrollY }));
+  } catch (e) { /* 저장소를 못 쓰면 복원만 생략 */ }
   location.reload();
 }
 try {
   const pending = sessionStorage.getItem("toast");
   if (pending) { sessionStorage.removeItem("toast"); toast(pending); }
-} catch (e) { /* 저장소를 못 쓰면 알림만 생략 */ }
+  const restore = JSON.parse(sessionStorage.getItem("restore") || "null");
+  sessionStorage.removeItem("restore");
+  if (restore && restore.path === location.pathname + location.search) {
+    restore.open.forEach((id) => {
+      const row = document.getElementById(id);
+      const btn = document.querySelector(`[data-toggle="${id}"]`);
+      if (row && btn) { row.hidden = false; btn.setAttribute("aria-expanded", "true"); }
+    });
+    history.scrollRestoration = "manual";
+    scrollTo(0, restore.y);
+  }
+} catch (e) { /* 복원 실패 시 기본 화면 */ }
 
 // 한 줄 입력 대화상자: 이름 변경, 태그·그룹 목록 편집에 함께 쓴다
 const editDlg = document.getElementById("dlg-edit");
