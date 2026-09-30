@@ -43,16 +43,30 @@ BOT_NAME=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["username"])'
 echo "봇 확인: $BOT_NAME ($APP_ID)"
 
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-OLD_PORT=$( [[ -f $ENV_FILE ]] && grep -E '^WEB_PORT=' "$ENV_FILE" | cut -d= -f2- || true )
-OLD_URL=$( [[ -f $ENV_FILE ]] && grep -E '^WEB_BASE_URL=' "$ENV_FILE" | cut -d= -f2- || true )
-PORT=${OLD_PORT:-8080}
-BASE_URL=${OLD_URL:-http://${IP:-localhost}:$PORT}
-read -rp "관리자 웹 주소 [$BASE_URL]: " IN_URL
-BASE_URL=${IN_URL:-$BASE_URL}
-PORT=$(python3 -c 'import sys,urllib.parse as u; p=u.urlparse(sys.argv[1]); print(p.port or (443 if p.scheme=="https" else 80))' "$BASE_URL")
-[[ -n $OLD_URL && $BASE_URL == "$OLD_URL" ]] && PORT=${OLD_PORT:-$PORT}
+old_val() { [[ -f $ENV_FILE ]] && grep -E "^$1=" "$ENV_FILE" | cut -d= -f2- || true; }
+OLD_PORT=$(old_val WEB_PORT)
+OLD_URL=$(old_val WEB_BASE_URL)
 
-OLD_IMG=$( [[ -f $ENV_FILE ]] && grep -E '^EMOJI_IMG_DIR=' "$ENV_FILE" | cut -d= -f2- || true )
+while true; do
+  read -rp "관리자 웹 포트 (서버 안에서 여는 포트) [${OLD_PORT:-8080}]: " PORT
+  PORT=${PORT:-${OLD_PORT:-8080}}
+  [[ $PORT =~ ^[0-9]+$ && $PORT -ge 1024 && $PORT -le 65535 ]] && break
+  echo "1024~65535 사이 숫자로 입력하세요."
+done
+
+echo "디스코드에 보낼 링크 주소입니다. 폰에서도 열리게 하려면 도메인을 넣으세요. (예: https://emoji.example.com)"
+while true; do
+  read -rp "외부 접속 주소 [${OLD_URL:-http://${IP:-localhost}:$PORT}]: " BASE_URL
+  BASE_URL=${BASE_URL:-${OLD_URL:-http://${IP:-localhost}:$PORT}}
+  BASE_URL=${BASE_URL%/}
+  [[ $BASE_URL =~ ^https?://[^/[:space:]]+$ ]] && break
+  echo "http:// 또는 https:// 로 시작하고, 뒤에 경로가 없는 주소로 입력하세요."
+done
+# https 주소면 앞단 프록시(Caddy 등)가 있다고 보고 실제 접속 IP를 프록시 헤더에서 읽는다
+TRUST_PROXY=0
+[[ $BASE_URL == https://* ]] && TRUST_PROXY=1
+
+OLD_IMG=$(old_val EMOJI_IMG_DIR)
 DEFAULT_IMG=${OLD_IMG:-$DATA/images}
 while true; do
   read -rp "이모티콘 이미지 저장 폴더 [$DEFAULT_IMG]: " IMG_DIR
@@ -94,7 +108,7 @@ cd "$APP"
 # ---- 설정 파일 (토큰은 여기에만 저장, 소유자 root / 그룹 emojibot 읽기) ----
 say "설정 저장 ($ENV_FILE)"
 install -d -m 750 -o root -g "$SVC_USER" "$CONF"
-SECRET=$( [[ -f $ENV_FILE ]] && grep -E '^SECRET_KEY=' "$ENV_FILE" | cut -d= -f2- || true )
+SECRET=$(old_val SECRET_KEY)
 SECRET=${SECRET:-$(python3 -c 'import secrets; print(secrets.token_hex(32))')}
 umask 027
 cat > "$ENV_FILE" <<EOF
@@ -102,6 +116,7 @@ BOT_TOKEN=$TOKEN
 SECRET_KEY=$SECRET
 WEB_PORT=$PORT
 WEB_BASE_URL=$BASE_URL
+TRUST_PROXY=$TRUST_PROXY
 EMOJI_DATA=$DATA
 EMOJI_IMG_DIR=$IMG_DIR
 EMOJI_SIZE=180
@@ -160,7 +175,7 @@ say "설치 완료"
 systemctl --no-pager --lines=0 status emoji-bot.service emoji-web.service | grep -E '●|Active:' || true
 cat <<EOF
 
-관리자 웹:   $BASE_URL
+관리자 웹:   $BASE_URL  (서버 안에서는 http://${IP:-localhost}:$PORT)
 이미지 폴더: $IMG_DIR
 관리자 ID:   ${ADMIN_USER:-(기존 계정 유지)}
 EOF

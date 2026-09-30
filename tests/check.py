@@ -89,8 +89,6 @@ rows, total = core.search("다람", "group")
 assert total == 1 and rows[0]["ename"] == "후다닥"
 assert core.search("", "all", 0, 1)[1] == 2 and len(core.search("", "all", 0, 1)[0]) == 1
 assert core.search("달리", "name")[1] == 0
-sheet = Image.open(io.BytesIO(core.contact_sheet(core.search()[0], 3)))
-assert sheet.size[0] > 300, sheet.size
 assert core.delete_label("tags", name="급함") == 1
 assert core.get_emoji("후다닥")["tags"] == "달리기"
 assert core.count_targets("group", "다람쥐") == 1
@@ -106,7 +104,18 @@ t = core.create_login_token("123456789012345678")
 assert core.consume_login_token(t) == "123456789012345678"
 assert core.consume_login_token(t) is None
 
-# 6) 내부망 주소 차단
+# 6) 갤러리 링크: 권한 있는 사용자만, 만료되면 무효
+core.touch_user("123456789012345678", "tester")
+gt = core.create_gallery("123456789012345678", "999", "itoken", "후다", "name")
+assert core.get_gallery(gt) is None, "권한 없는 사용자 링크가 열림"
+with db.conn() as c:
+    c.execute("UPDATE users SET can_bot=1 WHERE discord_id='123456789012345678'")
+assert core.get_gallery(gt)["q"] == "후다" and 0 < core.seconds_left(core.get_gallery(gt)) <= 14 * 60
+with db.conn() as c:
+    c.execute("UPDATE galleries SET expires_at='2000-01-01 00:00:00'")
+assert core.get_gallery(gt) is None, "만료된 링크가 열림"
+
+# 7) 내부망 주소 차단
 try:
     core.fetch("http://127.0.0.1/x.png")
     raise AssertionError("내부망 허용됨")

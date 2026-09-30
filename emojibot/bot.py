@@ -1,7 +1,7 @@
 """디스코드 봇. /e 를 입력하면 하위 명령과 입력 칸이 차례로 나온다.
 
 /e send      이모티콘 보내기 (이름 자동완성)
-/e find      격자 미리보기로 찾아서 번호를 눌러 보내기 (이전/다음 페이지)
+/e find      웹 갤러리 링크 → 스크롤하며 이미지를 누르면 채널로 바로 전송
 /e add-pack  카카오 이모티콘 팩 추가
 /e add       단일 이모티콘 추가 (그룹·태그는 등록된 것 중에서 자동완성)
 /e del-pack  이름·태그·그룹 기준으로 이모티콘 여러 개 삭제
@@ -10,9 +10,7 @@
 /e help      사용법
 """
 import asyncio
-import io
 import logging
-import math
 import os
 
 import discord
@@ -25,8 +23,6 @@ log = logging.getLogger("emojibot")
 BASE_URL = os.environ.get("WEB_BASE_URL", "http://localhost:8080").rstrip("/")
 MAX_UPLOAD = 10 * 1024 * 1024
 NOTICE_SECONDS = 20        # 완료 안내가 사라지기까지의 시간
-GALLERY_MINUTES = 10       # 격자 목록 버튼이 동작하는 시간
-PAGE_SIZES = {4: 2, 9: 3, 12: 4, 16: 4, 20: 5}  # 한 페이지 개수 -> 한 줄 칸 수
 
 FIELDS = [Choice(name="전체", value="all"), Choice(name="이름", value="name"),
           Choice(name="태그", value="tag"), Choice(name="그룹", value="group")]
@@ -117,69 +113,20 @@ def multi_choices(names_fn, current):
     return out[:25]
 
 
-# ---------- 격자 미리보기 ----------
+# ---------- 웹 갤러리 ----------
 
-class GalleryView(discord.ui.View):
-    """번호가 붙은 격자 이미지 + 번호 버튼(누르면 전송) + 이전/다음."""
-
-    def __init__(self, q, field, per_page, page=0):
-        super().__init__(timeout=GALLERY_MINUTES * 60)
-        self.q, self.field, self.per_page, self.page = q, field, per_page, page
-        self.cols = PAGE_SIZES[per_page]
-        self.rows, self.total = [], 0
-
-    async def load(self):
-        self.rows, self.total = await asyncio.to_thread(
-            core.search, self.q, self.field, self.page * self.per_page, self.per_page)
-        self.pages = max(1, math.ceil(self.total / self.per_page))
-        self.clear_items()
-        for i, row in enumerate(self.rows):
-            btn = discord.ui.Button(label=str(i + 1), style=discord.ButtonStyle.primary, row=i // self.cols)
-            btn.callback = self._sender(row["ename"])
-            self.add_item(btn)
-        nav = [
-            ("◀ 이전", self.page == 0, -1),
-            (f"{self.page + 1} / {self.pages}", True, 0),
-            ("다음 ▶", self.page + 1 >= self.pages, 1),
-        ]
-        for label, disabled, step in nav:
-            btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, disabled=disabled, row=4)
-            if step:
-                btn.callback = self._mover(step)
-            self.add_item(btn)
-        return self
-
-    def content(self):
-        head = f"**'{self.q}'** {FIELD_LABEL[self.field]} 검색" if self.q else "**전체 이모티콘**"
-        names = "   ".join(f"`{i + 1}` {r['ename']}" for i, r in enumerate(self.rows))
-        return f"{head}  {self.total}개  ({self.page + 1}/{self.pages} 페이지)\n{names}\n번호를 누르면 채널에 보냅니다."
-
-    async def file(self):
-        data = await asyncio.to_thread(core.contact_sheet, self.rows, self.cols)
-        return discord.File(io.BytesIO(data), filename="list.png")
-
-    def _sender(self, ename):
-        async def cb(inter):
-            if not await allowed(inter):
-                return
-            row = await asyncio.to_thread(core.get_emoji, ename)
-            if row is None:
-                return await reply(inter, "이미 삭제된 이모티콘입니다.", fade=True)
-            await send_emoji(inter, row)
-        return cb
-
-    def _mover(self, step):
-        async def cb(inter):
-            view = await GalleryView(self.q, self.field, self.per_page, self.page + step).load()
-            await inter.response.edit_message(content=view.content(), attachments=[await view.file()], view=view)
-        return cb
-
-
-async def show_gallery(inter, q="", field="all", per_page=9, empty_msg=None):
-    view = await GalleryView(q, field, per_page).load()
-    if not view.total:
-        return await reply(inter, empty_msg or f"'{q}' 검색 결과가 없습니다.", fade=True)
-    await reply(inter, view.content(), file=await view.file(), view=view)
+async def show_gallery(inter, q="", field="all", intro=None):
+    """조건에 맞는 이모티콘이 있으면 웹 갤러리 링크를 나만 보이게 보낸다."""
+    _, total = await asyncio.to_thread(core.search, q, field, 0, 1)
+    if not total:
+        return await reply(inter, f"'{q}' 검색 결과가 없습니다." if q else
+                           "아직 등록된 이모티콘이 없습니다. `/e add-pack`으로 추가하세요.", fade=True)
+    token = await asyncio.to_thread(core.create_gallery, inter.user.id, inter.application_id, inter.token, q, field)
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label="갤러리 열기", url=f"{BASE_URL}/g/{token}", emoji="🖼️"))
+    head = intro or (f"**'{q}'** {FIELD_LABEL[field]} 검색 결과 {total}개" if q else f"전체 이모티콘 {total}개")
+    await reply(inter, f"{head}\n갤러리에서 이모티콘을 누르면 이 채널에 바로 보내집니다. "
+                       f"(링크는 {core.GALLERY_MINUTES}분 동안, 나만 쓸 수 있어요)", view=view)
 
 
 class ConfirmView(discord.ui.View):
@@ -210,7 +157,7 @@ async def cmd_send(inter: discord.Interaction, ename: str):
     row = await asyncio.to_thread(core.get_emoji, ename)
     if row:
         return await send_emoji(inter, row)
-    await show_gallery(inter, ename, empty_msg=f"'{ename}' 이모티콘이 없습니다. `/e find`로 둘러보세요.")
+    await show_gallery(inter, ename, intro=f"'{ename}'과 정확히 같은 이름은 없어서 비슷한 결과를 모았습니다.")
 
 
 @cmd_send.autocomplete("ename")
@@ -222,14 +169,12 @@ async def ac_send(inter, current: str):
                    value=r["ename"][:100]) for r in rows][:25]
 
 
-@e.command(name="find", description="이모티콘을 격자 미리보기로 찾아서 보내기")
-@app_commands.rename(q="검색어", field="기준", per_page="개수")
-@app_commands.describe(q="비우면 전체 목록", field="어디에서 찾을지 (기본: 전체)", per_page="한 페이지에 보여줄 개수 (기본 9)")
-@app_commands.choices(field=FIELDS, per_page=[Choice(name=f"{n}개", value=n) for n in PAGE_SIZES])
-async def cmd_find(inter: discord.Interaction, q: str = "",
-                   field: Choice[str] | None = None, per_page: Choice[int] | None = None):
-    await show_gallery(inter, q, field.value if field else "all", per_page.value if per_page else 9,
-                       empty_msg=None if q else "아직 등록된 이모티콘이 없습니다. `/e add-pack`으로 추가하세요.")
+@e.command(name="find", description="웹 갤러리에서 스크롤하며 골라 보내기")
+@app_commands.rename(q="검색어", field="기준")
+@app_commands.describe(q="비우면 전체 목록", field="어디에서 찾을지 (기본: 전체)")
+@app_commands.choices(field=FIELDS)
+async def cmd_find(inter: discord.Interaction, q: str = "", field: Choice[str] | None = None):
+    await show_gallery(inter, q.strip(), field.value if field else "all")
 
 
 @cmd_find.autocomplete("q")
@@ -253,7 +198,7 @@ async def cmd_add_pack(inter: discord.Interaction, url: str, name: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     n = await asyncio.to_thread(core.add_pack, url, name, inter.user.name)
     await reply(inter, f"✅ '{name}' 팩을 추가했습니다. ({name}-1 ~ {name}-{n})", fade=True)
-    await show_gallery(inter, name, "name", 20 if n > 12 else 12)
+    await show_gallery(inter, name, "name", intro=f"방금 추가한 '{name}' 팩")
 
 
 @e.command(name="add", description="이모티콘 1개 추가")
@@ -272,7 +217,7 @@ async def cmd_add(inter: discord.Interaction, ename: str, image: discord.Attachm
     data = await image.read() if image is not None else await asyncio.to_thread(core.fetch, image_url)
     ename = await asyncio.to_thread(core.add_single, ename, data, inter.user.name, name, groups, tags)
     await reply(inter, f"✅ '{ename}' 이모티콘을 추가했습니다.", fade=True)
-    await show_gallery(inter, ename, "name", 4)
+    await show_gallery(inter, ename, "name", intro=f"방금 추가한 '{ename}'")
 
 
 @cmd_add.autocomplete("groups")
@@ -359,7 +304,7 @@ async def cmd_web(inter: discord.Interaction):
 HELP = discord.Embed(title="이모티콘 봇 사용법", color=0xFFC940, description=(
     "`/e` 를 입력하면 아래 명령이 목록으로 뜹니다. 고른 뒤 나오는 칸만 채우면 됩니다.\n\n"
     "**/e send** 이름 일부를 입력하면 자동완성 목록에서 골라 바로 보냅니다.\n"
-    "**/e find** 격자 미리보기로 둘러보고 번호를 눌러 보냅니다. 기준(전체·이름·태그·그룹)과 한 페이지 개수를 고를 수 있습니다.\n"
+    "**/e find** 웹 갤러리 링크를 받습니다. 스크롤하며 이미지를 누르면 이 채널에 바로 보내집니다 (14분 동안).\n"
     "**/e add-pack** 카카오 이모티콘 주소와 팩 이름으로 팩을 통째로 추가합니다.\n"
     "**/e add** 이미지 1개를 추가합니다. 그룹·태그는 등록된 것 중에서 고릅니다.\n"
     "**/e del-pack** 이름·태그·그룹 기준으로 여러 개를 삭제합니다.\n"

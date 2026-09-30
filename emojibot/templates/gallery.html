@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#1d2160">
+<title>이모티콘 갤러리</title>
+<link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;700&display=swap">
+<link rel="stylesheet" href="{{ url_for('static', filename='gallery.css') }}">
+</head>
+<body>
+{% if expired %}
+<main class="expired">
+  <img src="{{ url_for('static', filename='logo.png') }}" alt="" width="96" height="96">
+  <h1>링크가 만료됐어요</h1>
+  <p>디스코드에서 <b>/e find</b> 를 다시 쓰면 새 링크가 나와요.</p>
+</main>
+{% else %}
+<div id="app" data-token="{{ token }}" data-q="{{ q }}" data-field="{{ field }}" data-seconds="{{ seconds }}">
+  <header class="bar">
+    <div class="row">
+      <label class="search">
+        <span class="visually-hidden">검색</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" value="{{ q }}" placeholder="이름, 팩, 태그, 그룹" enterkeyhint="search" autocomplete="off">
+      </label>
+      <span class="timer" id="timer" aria-live="off" title="남은 시간"></span>
+    </div>
+    <div class="chips" id="fields" role="group" aria-label="검색 기준">
+      {% for key, label in [('all','전체'), ('name','이름'), ('tag','태그'), ('group','그룹')] %}
+      <button type="button" data-field="{{ key }}" aria-pressed="{{ 'true' if field == key else 'false' }}">{{ label }}</button>
+      {% endfor %}
+    </div>
+    <div class="chips packs" id="packs" role="group" aria-label="팩으로 거르기"></div>
+  </header>
+  <main id="list" aria-live="polite"><p class="note">불러오는 중…</p></main>
+  <div class="toast" id="toast" role="status" hidden></div>
+</div>
+<script src="{{ url_for('static', filename='gallery.js') }}"></script>
+{% endif %}
+</body>
+</html>

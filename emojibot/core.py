@@ -12,6 +12,9 @@ import uuid
 from collections import Counter
 from datetime import datetime, timedelta
 
+import json
+import urllib.error
+
 from PIL import Image, ImageSequence
 
 from . import db
@@ -438,40 +441,6 @@ def pack_names(q="", limit=25):
                                         (q or "", limit))]
 
 
-def contact_sheet(rows, cols, cell=None):
-    """검색 결과 미리보기: 번호가 붙은 격자 이미지(PNG) 한 장."""
-    from PIL import ImageDraw, ImageFont
-    cell = cell or (150 if cols <= 3 else 120)
-    gap, pad = 8, 12
-    n_rows = max(1, -(-len(rows) // cols))
-    w = pad * 2 + cols * cell + (cols - 1) * gap
-    h = pad * 2 + n_rows * cell + (n_rows - 1) * gap
-    sheet = Image.new("RGBA", (w, h), (38, 43, 110, 255))
-    draw = ImageDraw.Draw(sheet)
-    try:
-        font = ImageFont.load_default(size=max(14, cell // 8))
-    except TypeError:  # 오래된 Pillow
-        font = ImageFont.load_default()
-    for i, r in enumerate(rows):
-        x = pad + (i % cols) * (cell + gap)
-        y = pad + (i // cols) * (cell + gap)
-        draw.rounded_rectangle((x, y, x + cell, y + cell), radius=14, fill=(48, 54, 138, 255))
-        try:
-            with Image.open(os.path.join(db.IMG_DIR, r["file"])) as im:
-                im.seek(0)
-                thumb = im.convert("RGBA")
-            thumb.thumbnail((cell - 20, cell - 20), Image.LANCZOS)
-            sheet.alpha_composite(thumb, (x + (cell - thumb.width) // 2, y + (cell - thumb.height) // 2))
-        except OSError:
-            draw.text((x + cell // 2, y + cell // 2), "?", fill="white", font=font, anchor="mm")
-        b = max(24, cell // 5)
-        draw.ellipse((x + 6, y + 6, x + 6 + b, y + 6 + b), fill=(255, 201, 64, 255))
-        draw.text((x + 6 + b / 2, y + 6 + b / 2), str(i + 1), fill=(38, 43, 110, 255), font=font, anchor="mm")
-    out = io.BytesIO()
-    sheet.save(out, "PNG")
-    return out.getvalue()
-
-
 def popular(limit=25, days=30):
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     with db.conn() as c:
@@ -528,3 +497,60 @@ def consume_login_token(token):
     if row and row["expires_at"] >= db.now():
         return row["discord_id"]
     return None
+
+
+# ---------- 웹 갤러리 ----------
+# /e find 를 쓰면 그 명령의 interaction 토큰을 잠시 보관한다. 디스코드는 명령 후 15분 동안
+# 이 토큰으로 같은 채널(DM 포함)에 이어서 메시지를 보내는 것을 허용한다. 여유를 두고 14분.
+GALLERY_MINUTES = 14
+
+
+def create_gallery(discord_id, app_id, itoken, q="", field="all"):
+    token = secrets.token_urlsafe(24)
+    expires = (datetime.now() + timedelta(minutes=GALLERY_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
+    with db.conn() as c:
+        c.execute("DELETE FROM galleries WHERE expires_at<?", (db.now(),))
+        c.execute("INSERT INTO galleries VALUES (?,?,?,?,?,?,?)",
+                  (token, str(discord_id), str(app_id), itoken, q or "", field or "all", expires))
+    return token
+
+
+def get_gallery(token):
+    """유효한(만료 전, 사용자 권한 유지) 갤러리만 돌려준다."""
+    with db.conn() as c:
+        row = c.execute("SELECT * FROM galleries WHERE token=? AND expires_at>=?", (token or "", db.now())).fetchone()
+    if row is None:
+        return None
+    user = get_user(row["discord_id"])
+    return row if user and user["can_bot"] else None
+
+
+def seconds_left(row):
+    return max(0, int((datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S") - datetime.now()).total_seconds()))
+
+
+def post_followup(app_id, itoken, path):
+    """명령을 쓴 채널에 이미지를 보낸다 (interaction followup 웹훅, 봇 토큰 불필요)."""
+    ext = path.rsplit(".", 1)[-1]
+    boundary = uuid.uuid4().hex
+    with open(path, "rb") as f:
+        data = f.read()
+    payload = json.dumps({"attachments": [{"id": 0, "filename": f"emoji.{ext}"}]})
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\n"
+            f"Content-Type: application/json\r\n\r\n{payload}\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"emoji.{ext}\"\r\n"
+            f"Content-Type: image/{ext}\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        f"https://discord.com/api/v10/webhooks/{app_id}/{itoken}", data=body, method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                 "User-Agent": "DiscordBot (emoji-bot, 1.0)"})
+    try:
+        urllib.request.urlopen(req, timeout=20).close()
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise UserError("너무 빠르게 보냈어요. 잠깐 뒤에 다시 눌러 주세요.")
+        if e.code in (401, 403, 404):
+            raise UserError("디스코드 연결이 만료됐어요. 디스코드에서 /e find 를 다시 써 주세요.")
+        raise UserError(f"디스코드로 보내지 못했어요 (HTTP {e.code}).")
+    except urllib.error.URLError:
+        raise UserError("디스코드 서버에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.")

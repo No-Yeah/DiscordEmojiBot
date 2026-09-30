@@ -14,6 +14,10 @@ from . import core, db
 
 app = Flask(__name__)
 app.secret_key = os.environ["SECRET_KEY"]
+if os.environ.get("TRUST_PROXY") == "1":
+    # HTTPS 리버스 프록시(Caddy 등) 뒤: 실제 접속 IP를 X-Forwarded-For 에서 읽는다 (로그인 잠금용)
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
@@ -23,7 +27,8 @@ app.config.update(
 db.init()
 
 PAGE_SIZE = 30
-PUBLIC = {"login", "login_discord", "static"}
+FILE_RE = re.compile(r"[0-9a-f]{32}\.(png|gif)")
+PUBLIC = {"login", "login_discord", "static", "gallery", "gallery_items", "gallery_img", "gallery_send"}
 _fails = {}  # ip -> (실패 횟수, 첫 실패 시각). ponytail: 워커 1개 기준 메모리 카운터
 
 
@@ -129,7 +134,7 @@ def logout():
 
 @app.route("/img/<path:name>")
 def image(name):
-    if not re.fullmatch(r"[0-9a-f]{32}\.(png|gif)", name):
+    if not FILE_RE.fullmatch(name):
         abort(404)
     return send_from_directory(db.IMG_DIR, name, max_age=86400)
 
@@ -376,4 +381,52 @@ def api_account():
             raise core.UserError("새 비밀번호는 8자 이상이어야 합니다.")
         pw_hash = generate_password_hash(new_pw) if new_pw else row["pw_hash"]
         c.execute("UPDATE admin SET username=?, pw_hash=? WHERE id=1", (username, pw_hash))
+    return ok()
+
+
+# ---------- 웹 갤러리 (디스코드 /e find 링크, 로그인 없이 토큰으로만 접근) ----------
+
+
+@app.route("/g/<token>")
+def gallery(token):
+    row = core.get_gallery(token)
+    resp = app.make_response(render_template(
+        "gallery.html", token=token, expired=row is None,
+        q=row["q"] if row else "", field=row["field"] if row else "all",
+        seconds=core.seconds_left(row) if row else 0))
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
+@app.route("/g/<token>/items")
+def gallery_items(token):
+    row = core.get_gallery(token)
+    if row is None:
+        return jsonify(error="링크가 만료됐어요. 디스코드에서 /e find 를 다시 써 주세요."), 410
+    field = request.args.get("field", "all")
+    rows, total = core.search(request.args.get("q", ""), field if field in core._SEARCH else "all", 0, 3000)
+    return jsonify(total=total, seconds=core.seconds_left(row),
+                   items=[{"e": r["ename"], "f": r["file"], "p": r["pack"]} for r in rows])
+
+
+@app.route("/g/<token>/img/<name>")
+def gallery_img(token, name):
+    if not FILE_RE.fullmatch(name) or core.get_gallery(token) is None:
+        abort(404)
+    return send_from_directory(db.IMG_DIR, name, max_age=86400)
+
+
+@app.post("/g/<token>/send")
+def gallery_send(token):
+    if request.headers.get("X-Requested-With") != "fetch":
+        abort(400)
+    row = core.get_gallery(token)
+    if row is None:
+        return jsonify(error="링크가 만료됐어요. 디스코드에서 /e find 를 다시 써 주세요."), 410
+    emoji = core.get_emoji(arg("ename") or "")
+    if emoji is None:
+        raise core.UserError("삭제된 이모티콘이에요.")
+    core.post_followup(row["app_id"], row["itoken"], os.path.join(db.IMG_DIR, emoji["file"]))
+    core.log_usage(emoji["id"], row["discord_id"])
     return ok()

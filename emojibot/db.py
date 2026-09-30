@@ -70,6 +70,16 @@ CREATE TABLE IF NOT EXISTS admin(
   pw_hash TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS galleries(
+  token TEXT PRIMARY KEY,
+  discord_id TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  itoken TEXT NOT NULL,
+  q TEXT NOT NULL DEFAULT '',
+  field TEXT NOT NULL DEFAULT 'all',
+  expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS login_tokens(
   token TEXT PRIMARY KEY,
   discord_id TEXT NOT NULL,
