@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}디스코드 유저{% endblock %}
+{% block body %}
+<div class="head">
+  <div>
+    <h1>디스코드 유저</h1>
+    <p>봇에서 /e 를 처음 쓰면 권한 없이 목록에 올라옵니다. 체크하면 바로 적용됩니다.</p>
+  </div>
+  <form data-api="/api/user" class="search" data-done="유저를 추가했습니다.">
+    <input name="discord_id" type="text" inputmode="numeric" placeholder="디스코드 ID (숫자)" aria-label="디스코드 ID" required>
+    <input name="username" type="text" placeholder="표시 이름 (선택)" aria-label="표시 이름">
+    <button class="btn primary">유저 추가</button>
+  </form>
+</div>
+{% if rows %}
+<div class="table-wrap">
+<table class="wide">
+  <thead><tr><th scope="col">No</th><th scope="col">유저</th><th scope="col">등록일</th><th scope="col">봇 사용</th><th scope="col">웹 사용</th><th scope="col"><span class="visually-hidden">관리</span></th></tr></thead>
+  <tbody>
+  {% for u in rows %}
+    <tr>
+      <td class="num">{{ loop.index }}</td>
+      <td>{{ u.username }}<div class="hint">{{ u.discord_id }}</div></td>
+      <td class="date">{{ u.add_date[:16] }}</td>
+      <td><input class="switch" type="checkbox" name="can_bot" data-perm="/api/user/{{ u.discord_id }}/perm" {{ 'checked' if u.can_bot }} aria-label="{{ u.username }} 봇 사용"></td>
+      <td><input class="switch" type="checkbox" name="can_web" data-perm="/api/user/{{ u.discord_id }}/perm" {{ 'checked' if u.can_web }} aria-label="{{ u.username }} 웹 사용"></td>
+      <td style="text-align:right"><button class="x" aria-label="{{ u.username }} 삭제" data-delete="/api/user/{{ u.discord_id }}/delete" data-confirm="'{{ u.username }}' 유저를 목록에서 삭제할까요? 권한도 모두 없어집니다.">✕</button></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="panel"><p class="empty">아직 유저가 없습니다. 디스코드에서 봇에 /e 를 한 번 입력하게 하거나, 위에 디스코드 ID로 직접 추가하세요.</p></div>
+{% endif %}
+{% endblock %}

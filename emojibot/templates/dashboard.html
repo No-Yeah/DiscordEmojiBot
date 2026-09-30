@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}대시보드{% endblock %}
+{% block body %}
+<img class="banner" src="{{ url_for('static', filename='banner.png') }}" alt="Discord Emoji Bot: URL만 넣으면 이모지로 변환">
+
+<div class="dash">
+  <section class="panel" aria-labelledby="h-emo">
+    <h2 id="h-emo">등록된 이모티콘 <span class="hint">{{ today }} 기준</span></h2>
+    <div class="hero-num">
+      <div>
+        <div class="big">{{ emo.total or 0 }}<small>개</small></div>
+        <div class="candy" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      </div>
+      <div class="chips">
+        <div class="chip new"><b>+{{ emo.new or 0 }}</b><span>오늘 신규</span></div>
+        <div class="chip del"><b>−{{ emo.deleted or 0 }}</b><span>오늘 삭제</span></div>
+        <div class="chip"><b>{{ emo.packs or 0 }}</b><span>이모티콘 팩</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-usr">
+    <h2 id="h-usr">디스코드 유저</h2>
+    <div class="stat-row"><span>전체</span><b>{{ usr.total or 0 }}</b></div>
+    <div class="stat-row"><span>봇 사용 허용</span><b>{{ usr.allowed or 0 }}</b></div>
+    <div class="stat-row"><span>오늘 신규</span><b>{{ usr.new or 0 }}</b></div>
+    <div class="stat-row"><span>오늘 삭제</span><b>{{ usr.deleted or 0 }}</b></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-new">
+    <h2 id="h-new">오늘 새로 등록한 이모티콘</h2>
+    {% if new_today %}
+    <div class="thumbs">
+      {% for e in new_today %}
+      <figure><img src="{{ url_for('image', name=e.file) }}" alt="{{ e.ename }}" loading="lazy"><figcaption title="{{ e.ename }}">{{ e.ename }}</figcaption></figure>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty">오늘 등록한 이모티콘이 없습니다. <a href="{{ url_for('emojis') }}">이모티콘 화면</a>에서 추가하거나 디스코드에서 <b>/e add-pack</b>을 쓰세요.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="h-top">
+    <h2 id="h-top">많이 쓴 순위</h2>
+    <div class="tabs" role="tablist">
+      {% for key, (label, _) in ranges.items() %}
+      <a href="?range={{ key }}" aria-current="{{ 'true' if rng == key else 'false' }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <h3 class="rank-h">이모티콘</h3>
+    {% if top_emoji %}
+    <ol class="rank">
+      {% for e in top_emoji %}<li><img src="{{ url_for('image', name=e.file) }}" alt="">{{ e.ename }}<span class="n">{{ e.n }}회</span></li>{% endfor %}
+    </ol>
+    {% else %}<p class="empty">이 기간에 보낸 이모티콘이 없습니다.</p>{% endif %}
+    <h3 class="rank-h" style="margin-top:12px">유저</h3>
+    {% if top_user %}
+    <ol class="rank">
+      {% for u in top_user %}<li>{{ u.name }}<span class="n">{{ u.n }}회</span></li>{% endfor %}
+    </ol>
+    {% else %}<p class="empty">이 기간에 봇을 쓴 유저가 없습니다.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}
