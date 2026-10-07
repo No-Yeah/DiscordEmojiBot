@@ -9,7 +9,7 @@ Group=emojibot
 EnvironmentFile=/etc/emoji-bot/emoji-bot.env
 WorkingDirectory=/opt/emoji-bot
 # 워커 1개(스레드 8개): 로그인 실패 횟수를 메모리에 두기 때문
-ExecStart=/opt/emoji-bot/.venv/bin/gunicorn --workers 1 --threads 8 --timeout 300 --bind 0.0.0.0:${WEB_PORT} emojibot.web:app
+ExecStart=/opt/emoji-bot/.venv/bin/gunicorn --workers 1 --threads 8 --timeout 300 --access-logfile - --bind 0.0.0.0:${WEB_PORT} emojibot.web:app
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
