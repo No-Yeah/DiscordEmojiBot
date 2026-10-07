@@ -41,8 +41,22 @@ class Bot(discord.Client):
         self.add_dynamic_items(SendButton, NavButton, SizeButton, HomeButton, GroupButton, HomePageButton,
                                GroupSelect, JumpSelect)
         self.tree.add_command(e)
-        await self.tree.sync()
-        log.info("슬래시 명령 동기화 완료")
+        try:
+            await self.sync_commands()
+            log.info("슬래시 명령 동기화 완료")
+        except Exception:  # 동기화가 실패해도 봇은 켜져서 기존 등록된 명령에 응답해야 한다
+            log.exception("슬래시 명령 동기화 실패 (기존 등록된 명령으로 계속 동작)")
+
+    async def sync_commands(self):
+        """tree.sync() 대신 직접 등록. 액티비티를 켜면 디스코드가 'Entry Point' 명령(type 4)을 자동으로 만드는데,
+        전체 덮어쓰기에 이 명령이 빠지면 디스코드가 거절(50240)하므로 기존 것을 그대로 포함해서 보낸다."""
+        payload = [cmd.to_dict(self.tree) for cmd in self.tree.get_commands()]
+        keep = ("id", "name", "name_localizations", "description", "description_localizations", "type",
+                "handler", "integration_types", "contexts", "default_member_permissions", "nsfw")
+        for cmd in await self.http.get_global_commands(self.application_id):
+            if cmd.get("type") == 4:
+                payload.append({k: cmd[k] for k in keep if k in cmd})
+        await self.http.bulk_upsert_global_commands(self.application_id, payload=payload)
 
 
 class EGroup(app_commands.Group):
