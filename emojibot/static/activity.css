@@ -23,3 +23,6 @@
   .tiles { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
   .grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
 }
+/* 모바일: 디스코드가 위쪽에 겹쳐 그리는 앱 이름·나가기 버튼(약 48px)을 피한다 */
+body.mobile .bar { padding-top: calc(56px + env(safe-area-inset-top, 0px)); }
+body.mobile .sec { scroll-margin-top: 200px; }
