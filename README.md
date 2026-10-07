@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/33142909/README.md)
 <p align="center"><img src="emojibot/static/banner.png" alt="Discord Emoji Bot" width="720"></p>
 
 # Discord Emoji Bot

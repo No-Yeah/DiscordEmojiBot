@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}이모티콘{% endblock %}
+{% macro th(key, label) -%}
+  {%- set next = 'asc' if (sort == key and direction == 'desc') else 'desc' -%}
+  <th scope="col"><a href="?{{ {'q': q, 'sort': key, 'dir': next} | urlencode }}"
+     {% if sort == key %}aria-sort="{{ 'ascending' if direction == 'asc' else 'descending' }}"{% endif %}>
+    {{ label }}{% if sort == key %} {{ '▲' if direction == 'asc' else '▼' }}{% endif %}</a></th>
+{%- endmacro %}
+{% macro chips(value, cls) -%}
+  {%- for x in (value or '').split(', ') if x %}<span class="tag {{ cls }}">{{ x }}</span>{% endfor -%}
+{%- endmacro %}
+{% block body %}
+<div class="head">
+  <div>
+    <h1>이모티콘</h1>
+    <p>팩과 단일 이모티콘 {{ total }}건. 팩 이름을 누르면 펼쳐 보고, 왼쪽 칸을 체크하면 그룹을 한꺼번에 붙이거나 뗄 수 있습니다.</p>
+  </div>
+  <div class="actions">
+    <form class="search" method="get" role="search">
+      <input type="search" name="q" value="{{ q }}" placeholder="이름, 그룹, 태그, URL 검색" aria-label="검색어">
+      <button class="btn">검색</button>
+    </form>
+    <button class="btn primary" data-open="dlg-pack">팩 추가</button>
+    <button class="btn primary" data-open="dlg-single">단일 추가</button>
+  </div>
+</div>
+
+{% if packs %}
+<div class="bulk" id="bulk" hidden>
+  <span><b id="bulk-n">0</b>개 선택</span>
+  <button type="button" class="btn small primary" data-bulk="add">그룹 붙이기</button>
+  <button type="button" class="btn small danger" data-bulk="remove">그룹 떼기</button>
+  <button type="button" class="btn small ghost" data-bulk="clear">선택 해제</button>
+</div>
+<div class="table-wrap">
+<table class="wide">
+  <thead><tr>
+    <th scope="col" class="chk"><input type="checkbox" id="check-all" aria-label="이 페이지 전체 선택"></th>
+    {{ th('no', 'No') }}{{ th('group', '그룹') }}{{ th('name', '이름') }}{{ th('url', 'URL / 이모티콘') }}
+    {{ th('tag', '태그') }}{{ th('date', '등록일') }}{{ th('user', '추가한 사람') }}<th scope="col"><span class="visually-hidden">관리</span></th>
+  </tr></thead>
+  <tbody>
+  {% for p in packs %}
+    {% set list = items.get(p.id, []) %}
+    <tr class="{{ 'pack-row' if p.kind == 'pack' }}">
+      <td class="chk"><input type="checkbox" class="row-check" value="{{ p.id }}" aria-label="{{ p.name }} 선택"></td>
+      <td class="num">{{ p.id }}</td>
+      <td><button class="link" data-pick="group" data-url="/api/pack/{{ p.id }}/groups" data-value="{{ p.grp_names or '' }}"
+            data-title="'{{ p.name }}' 그룹 선택">
+          {{ chips(p.grp_names, 'g') or '' }}{% if not p.grp_names %}<span class="edit-hint">+ 그룹</span>{% endif %}</button></td>
+      <td>
+        {% if p.kind == 'pack' %}
+        <button class="link toggle" data-toggle="d{{ p.id }}" aria-expanded="false" aria-controls="d{{ p.id }}">{{ p.name }}</button><span class="kind pack">팩 {{ p.cnt }}</span>
+        {% else %}{{ p.name }}<span class="kind single">단일</span>{% endif %}
+      </td>
+      {% if p.kind == 'pack' %}
+      <td class="url"><a href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.url }}</a></td>
+      <td class="edit-hint">펼쳐서 편집</td>
+      {% else %}
+      {% set e = list[0] %}
+      <td>{% if e %}<span style="display:flex;align-items:center;gap:8px">
+          <img src="{{ url_for('image', name=e.file) }}" alt="" width="40" height="40" style="object-fit:contain">
+          <button class="link" data-edit="/api/emoji/{{ e.id }}/rename" data-value="{{ e.ename }}" data-title="이모티콘 이름 변경">{{ e.ename }}</button></span>{% endif %}</td>
+      <td>{% if e %}<button class="link" data-pick="tag" data-url="/api/emoji/{{ e.id }}/tags" data-value="{{ e.tags or '' }}"
+            data-title="'{{ e.ename }}' 태그 선택">
+          {{ chips(e.tags, 't') }}{% if not e.tags %}<span class="edit-hint">+ 태그</span>{% endif %}</button>{% endif %}</td>
+      {% endif %}
+      <td class="date">{{ p.add_date[:16] }}</td>
+      <td class="date">{{ p.add_user }}</td>
+      <td style="white-space:nowrap">
+        <button class="btn small" data-edit="/api/pack/{{ p.id }}/rename" data-value="{{ p.name }}" data-title="이름 변경">이름 변경</button>
+        <button class="x" aria-label="{{ p.name }} 삭제" data-delete="/api/pack/{{ p.id }}/delete"
+          data-confirm="'{{ p.name }}'{{ ' 팩의 이모티콘 %d개를' % p.cnt if p.kind == 'pack' else '을' }} 삭제할까요? 되돌릴 수 없습니다.">✕</button>
+      </td>
+    </tr>
+    {% if p.kind == 'pack' %}
+    <tr class="detail" id="d{{ p.id }}" hidden>
+      <td colspan="9"><div class="grid">
+        {% for e in list %}
+        <div class="tile">
+          <img src="{{ url_for('image', name=e.file) }}" alt="{{ e.ename }}" loading="lazy">
+          <div class="row">
+            <button class="link" data-edit="/api/emoji/{{ e.id }}/rename" data-value="{{ e.ename }}" data-title="이모티콘 이름 변경"><b>{{ e.ename }}</b></button>
+            <button class="x" aria-label="{{ e.ename }} 삭제" data-delete="/api/emoji/{{ e.id }}/delete" data-confirm="'{{ e.ename }}'을 삭제할까요?">✕</button>
+          </div>
+          <button class="link" data-pick="tag" data-url="/api/emoji/{{ e.id }}/tags" data-value="{{ e.tags or '' }}"
+            data-title="'{{ e.ename }}' 태그 선택">
+            {{ chips(e.tags, 't') }}{% if not e.tags %}<span class="edit-hint">+ 태그</span>{% endif %}</button>
+        </div>
+        {% endfor %}
+      </div></td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if pages > 1 %}
+<nav class="pager" aria-label="페이지">
+  {% for n in range(1, pages + 1) %}
+    {% if n == page %}<span aria-current="page">{{ n }}</span>
+    {% else %}<a href="?{{ {'q': q, 'sort': sort, 'dir': direction, 'page': n} | urlencode }}">{{ n }}</a>{% endif %}
+  {% endfor %}
+</nav>
+{% endif %}
+{% elif q %}
+<p class="empty">'{{ q }}' 검색 결과가 없습니다. <a href="{{ url_for('emojis') }}">전체 목록 보기</a></p>
+{% else %}
+<div class="panel"><p class="empty">아직 이모티콘이 없습니다. 오른쪽 위 <b>팩 추가</b>에 카카오 이모티콘 주소를 넣어 시작하세요.</p></div>
+{% endif %}
+{% endblock %}
+
+{% block dialogs %}
+<script id="labels" type="application/json">{{ labels | tojson }}</script>
+<dialog id="dlg-pick">
+  <form method="dialog">
+    <h2></h2>
+    <label for="pick-q">찾기</label>
+    <input id="pick-q" type="search" autocomplete="off" placeholder="이름 일부를 입력하세요">
+    <div class="pick-list" role="group" aria-label="선택 목록"></div>
+    <button type="button" class="btn small pick-new" hidden></button>
+    <p class="hint pick-empty" hidden></p>
+    <div class="foot">
+      <button type="button" class="btn" data-close>취소</button>
+      <button class="btn primary">선택 완료</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="dlg-pack">
+  <form data-api="/api/pack">
+    <h2>카카오 이모티콘 팩 추가</h2>
+    <label for="pk-url">카카오 이모티콘 주소</label>
+    <input id="pk-url" name="url" type="url" placeholder="https://e.kakao.com/t/..." required>
+    <label for="pk-name">팩 이름</label>
+    <input id="pk-name" name="name" type="text" required maxlength="40">
+    <p class="hint">이모티콘마다 '팩이름-1', '팩이름-2' 식으로 이름이 붙습니다. 이미지를 받는 데 몇십 초 걸릴 수 있습니다.</p>
+    <div class="foot"><button type="button" class="btn" data-close>취소</button><button class="btn primary">팩 추가</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-single">
+  <form data-api="/api/single" data-done="이모티콘을 추가했습니다.">
+    <h2>단일 이모티콘 추가</h2>
+    <label>이미지</label>
+    <div class="drop" tabindex="0" role="button" aria-label="이미지 선택">
+      <img alt="" hidden><span>눌러서 선택하거나, 끌어놓거나, Ctrl+V로 붙여넣기</span>
+    </div>
+    <input type="file" name="file" accept="image/png,image/gif,image/webp,image/jpeg" hidden>
+    <label for="sg-url">또는 이미지 URL</label>
+    <input id="sg-url" name="image_url" type="url" placeholder="https://...">
+    <label for="sg-ename">이모티콘 이름 (필수)</label>
+    <input id="sg-ename" name="ename" type="text" required maxlength="40">
+    <label for="sg-name">이름</label>
+    <input id="sg-name" name="name" type="text" maxlength="40" placeholder="비우면 이모티콘 이름과 같게">
+    <label>그룹</label>
+    <input type="hidden" name="groups" id="sg-groups">
+    <button type="button" class="pick-field" data-pick="group" data-target="sg-groups" data-title="그룹 선택"><span class="edit-hint">+ 그룹 선택</span></button>
+    <label>태그</label>
+    <input type="hidden" name="tags" id="sg-tags">
+    <button type="button" class="pick-field" data-pick="tag" data-target="sg-tags" data-title="태그 선택"><span class="edit-hint">+ 태그 선택</span></button>
+    <div class="foot"><button type="button" class="btn" data-close>취소</button><button class="btn primary">단일 추가</button></div>
+  </form>
+</dialog>
+{% endblock %}

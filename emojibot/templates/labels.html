@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% set is_tag = kind == 'tag' %}
+{% set word = '태그' if is_tag else '그룹' %}
+{% block title %}{{ word }} 관리{% endblock %}
+{% block body %}
+<div class="narrow">
+<div class="head">
+  <div>
+    <h1>{{ word }} 관리</h1>
+    <p>{% if is_tag %}태그를 지워도 이모티콘은 남고 태그만 빠집니다. 태그는 한글만 쓸 수 있습니다.
+       {% else %}그룹을 지워도 팩과 이모티콘은 남고 그룹만 빠집니다.{% endif %}</p>
+  </div>
+</div>
+
+<div class="actions" style="margin-bottom:16px">
+  <input id="filter" type="search" placeholder="{{ word }} 검색" aria-label="{{ word }} 검색" style="flex:1;min-width:180px">
+  <form data-api="/api/{{ kind }}" class="search" data-done="{{ word }}를 추가했습니다.">
+    <input name="name" type="text" placeholder="새 {{ word }} 이름" aria-label="새 {{ word }} 이름" required>
+    <button class="btn primary">{{ word }} 추가</button>
+  </form>
+</div>
+
+{% if rows %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th scope="col">{{ word }}</th><th scope="col">{{ '이모티콘' if is_tag else '속한 이모티콘' }}</th><th scope="col"><span class="visually-hidden">관리</span></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr data-name="{{ r.name }}">
+      <td><a href="{{ url_for('emojis', q=r.name) }}"><span class="tag {{ 't' if is_tag else 'g' }}">{{ r.name }}</span></a></td>
+      <td class="num">{% if is_tag %}{{ r.emojis }}개{% else %}팩 {{ r.packs }}개, 단일 {{ r.singles }}개{% endif %}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn small" data-edit="/api/{{ kind }}/{{ r.id }}/rename" data-value="{{ r.name }}" data-title="{{ word }} 이름 변경">이름 변경</button>
+        <button class="x" aria-label="{{ r.name }} 삭제" data-delete="/api/{{ kind }}/{{ r.id }}/delete" data-confirm="{{ word }} '{{ r.name }}'를 삭제할까요?">✕</button>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="panel"><p class="empty">아직 {{ word }}가 없습니다. 위에서 추가하거나 이모티콘 화면에서 바로 붙이세요.</p></div>
+{% endif %}
+</div>
+{% endblock %}

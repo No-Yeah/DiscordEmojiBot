@@ -1,0 +1,21 @@
+[Unit]
+Description=Discord Emoji Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=emojibot
+Group=emojibot
+EnvironmentFile=/etc/emoji-bot/emoji-bot.env
+WorkingDirectory=/opt/emoji-bot
+ExecStart=/opt/emoji-bot/.venv/bin/python -m emojibot.bot
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/emoji-bot
+
+[Install]
+WantedBy=multi-user.target

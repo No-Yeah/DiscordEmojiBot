@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{% endblock %} | Emoji Bot</title>
+<link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;700&display=swap">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+{% set nav = [('dashboard', '대시보드'), ('emojis', '이모티콘'), ('groups', '그룹'), ('tags', '태그')] %}
+{% if g.me.admin %}{% set nav = nav + [('users', '디스코드 유저'), ('account', '계정')] %}{% endif %}
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="{{ url_for('dashboard') }}">
+      <img src="{{ url_for('static', filename='logo.png') }}" alt="">
+      <div><span>Emoji Bot</span><div class="candy" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
+    </a>
+    <nav class="nav" aria-label="주 메뉴">
+      {% for ep, label in nav %}
+      <a href="{{ url_for(ep) }}" {% if request.endpoint == ep %}aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <div class="me">{{ g.me.name }}{% if not g.me.admin %} (디스코드){% endif %} <a href="{{ url_for('logout') }}">로그아웃</a></div>
+  </div>
+</header>
+<main>
+{% block body %}{% endblock %}
+</main>
+
+<dialog id="dlg-edit">
+  <form method="dialog">
+    <h2></h2>
+    <label for="edit-input">값</label>
+    <input id="edit-input" type="text" autocomplete="off">
+    <p class="hint"></p>
+    <div class="foot">
+      <button type="button" class="btn" data-close>취소</button>
+      <button class="btn primary">저장</button>
+    </div>
+  </form>
+</dialog>
+{% block dialogs %}{% endblock %}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
