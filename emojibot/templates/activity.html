@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Emoji Bot</title>
+<!-- 액티비티 안에서는 외부 글꼴을 불러올 수 없어 기기 기본 글꼴을 쓴다. 모든 경로는 /.proxy 를 거친다 -->
+<link rel="stylesheet" href="/.proxy/static/gallery.css">
+<link rel="stylesheet" href="/.proxy/static/activity.css">
+</head>
+<body>
+<div id="app" data-client="{{ client_id }}">
+  <header class="bar">
+    <div class="row">
+      <button type="button" class="back" id="back" hidden aria-label="그룹 목록으로">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <label class="search">
+        <span class="visually-hidden">검색</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" placeholder="이름, 팩, 태그, 그룹 검색" enterkeyhint="search" autocomplete="off" disabled>
+      </label>
+    </div>
+    <h1 class="title" id="title" hidden></h1>
+    <div class="chips" id="fields" role="group" aria-label="검색 기준" hidden>
+      <button type="button" data-field="all" aria-pressed="true">전체</button>
+      <button type="button" data-field="name" aria-pressed="false">이름</button>
+      <button type="button" data-field="tag" aria-pressed="false">태그</button>
+      <button type="button" data-field="group" aria-pressed="false">그룹</button>
+    </div>
+    <div class="chips packs" id="packs" role="group" aria-label="팩"></div>
+  </header>
+  <main id="list" aria-live="polite"><p class="note">디스코드에 연결하는 중…</p></main>
+  <div class="toast" id="toast" role="status" hidden></div>
+</div>
+<script src="/.proxy/static/discord-sdk.js"></script>
+<script src="/.proxy/static/activity.js"></script>
+</body>
+</html>

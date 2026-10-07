@@ -1,0 +1,25 @@
+/* 액티비티 전용: 그룹 칸에 대표 이모티콘 2×2 */
+:root {
+  --display: system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --body: system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin-top: 12px; }
+.tile {
+  display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 6px 5px 6px;
+  background: var(--panel); border: 0; border-radius: 14px; cursor: pointer; color: var(--text); font: inherit;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent; text-align: center;
+}
+.tile:active { transform: scale(.96); background: var(--raised); }
+.tile:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+.tile.fav { box-shadow: inset 0 0 0 1.5px var(--yellow); }
+.quad { display: grid; grid-template-columns: 1fr 1fr; aspect-ratio: 1; gap: 2px; }
+.quad img { width: 100%; height: 100%; object-fit: contain; }
+.quad.one { grid-template-columns: 1fr; }
+.tile b { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile span { font-size: 11px; color: var(--muted); }
+.grid { grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); }
+.cell span { display: none; }  /* 액티비티에서는 그림만: 더 많이 보이게 */
+@media (min-width: 640px) {
+  .tiles { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
+}
