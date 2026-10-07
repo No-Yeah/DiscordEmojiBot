@@ -1,7 +1,8 @@
 // 디스코드 액티비티: /e pick 으로 디스코드 앱 안에서 열리는 이모티콘 고르기 창
 //   1) 디스코드 로그인(최초 1회 동의) → 2) 그룹 칸(대표 2×2) → 3) 그룹의 모든 팩·이모티콘 스크롤 → 누르면 전송
 //   검색창에 입력하면 검색 화면, 지우면 원래 화면
-const P = "/.proxy";  // 디스코드 프록시를 거쳐 서버의 /activity/... 로 간다
+// 페이지를 연 것과 같은 URL Mapping("/" → 도메인/activity)을 그대로 탄다. (/.proxy 접두어는 쓰지 않음)
+const P = "";
 const app = document.getElementById("app");
 const listEl = document.getElementById("list");
 const packsEl = document.getElementById("packs");
@@ -10,6 +11,9 @@ const titleEl = document.getElementById("title");
 const backEl = document.getElementById("back");
 const qEl = document.getElementById("q");
 const toastEl = document.getElementById("toast");
+
+// 모바일 디스코드는 창 위쪽에 앱 이름·나가기 버튼을 겹쳐 그린다 → 그만큼 내려서 그린다
+if (new URLSearchParams(location.search).get("platform") === "mobile") document.body.classList.add("mobile");
 
 let sdk = null;
 let session = "";
