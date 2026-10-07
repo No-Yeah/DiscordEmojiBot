@@ -59,13 +59,16 @@ sudo ./install.sh
 `/e pick`을 디스코드 앱 안의 창으로 열려면 위의 **https 도메인**이 먼저 준비되어 있어야 합니다.
 
 1. 개발자 포털 → **OAuth2** → Client Secret 을 **Reset Secret** 으로 발급해 복사합니다.
+   같은 화면 **Redirects** 에 `https://127.0.0.1` 을 하나 추가하고 저장합니다. (실제로 쓰이진 않지만 비어 있으면 로그인이 거부됩니다)
 2. 개발자 포털 → **Activities → Settings** → Enable Activities 를 켜고, Supported Platforms 에서 Web·iOS·Android 를 체크합니다.
 3. **Activities → URL Mappings** 에 아래 한 줄을 넣습니다.
    | PREFIX | TARGET |
    | --- | --- |
    | `/` | `emoji.example.com/activity` |
-4. `sudo bash install.sh`를 다시 실행해 Client Secret 을 붙여넣습니다. (토큰처럼 설정 파일에만 저장됩니다)
-5. 디스코드에서 `/e pick` → 처음 한 번은 "Emoji Bot이 계정 정보를 확인하려고 합니다" 동의 창이 뜹니다.
+4. 앞단 프록시(nginx 등)에서 `/activity` 경로를 디스코드 안에 띄울 수 있게 합니다. 보안 헤더(`X-Frame-Options`)를 빼고,
+   국가 차단·봇 필터가 있다면 클라우드플레어(ASN 13335 또는 공식 IP 대역)는 통과시킵니다. 디스코드 프록시가 클라우드플레어를 거쳐 여러 나라에서 접속합니다.
+5. `sudo bash install.sh`를 다시 실행해 Client Secret 을 붙여넣습니다. (토큰처럼 설정 파일에만 저장됩니다)
+6. 디스코드에서 `/e pick` → 처음 한 번은 "Emoji Bot이 계정 정보를 확인하려고 합니다" 동의 창이 뜹니다.
 
 보내기 방식: 창에서 누른 이모티콘은 `/e pick`을 쓴 대화방에 봇 이름으로 올라갑니다. `/e pick`으로 연 지 14분이 지나면,
 봇이 들어가 있는 서버 채널에서는 계속 보낼 수 있지만 1:1 DM에서는 `/e pick`을 다시 써야 합니다.
