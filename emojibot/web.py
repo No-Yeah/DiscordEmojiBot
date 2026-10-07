@@ -26,6 +26,25 @@ app.config.update(
 )
 db.init()
 
+
+class ActivityPaths:
+    """디스코드 액티비티 프록시가 /.proxy 접두어를 어떻게 넘기든 /activity/... 로 맞춘다.
+    (접두어를 떼고 넘기는 경우, /activity/.proxy/... 로 넘기는 경우, 도메인 루트의 /.proxy/... 로 넘기는 경우)"""
+
+    def __init__(self, wsgi):
+        self.wsgi = wsgi
+
+    def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "")
+        for prefix in ("/activity/.proxy/", "/.proxy/"):
+            if path.startswith(prefix):
+                environ["PATH_INFO"] = "/activity/" + path[len(prefix):]
+                break
+        return self.wsgi(environ, start_response)
+
+
+app.wsgi_app = ActivityPaths(app.wsgi_app)
+
 PAGE_SIZE = 30
 FILE_RE = re.compile(r"[0-9a-f]{32}\.(png|gif)")
 PUBLIC = {"login", "login_discord", "static", "gallery", "gallery_items", "gallery_groups", "gallery_img", "gallery_send",
