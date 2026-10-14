@@ -18,7 +18,7 @@
 .tile b { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile span { font-size: 11px; color: var(--muted); }
 .grid { grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); }
-.cell span { display: none; }  /* 액티비티에서는 그림만: 더 많이 보이게 */
+.cell > span:not(.badge) { display: none; }  /* 액티비티에서는 그림만: 더 많이 보이게 (★ 표시는 남김) */
 @media (min-width: 640px) {
   .tiles { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
   .grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
@@ -26,3 +26,34 @@
 /* 모바일: 디스코드가 위쪽에 겹쳐 그리는 앱 이름·나가기 버튼(약 48px)을 피한다 */
 body.mobile .bar { padding-top: calc(56px + env(safe-area-inset-top, 0px)); }
 body.mobile .sec { scroll-margin-top: 200px; }
+
+/* ★ 즐겨찾기 / 🔥 자주 쓰는 */
+.tile.star { box-shadow: inset 0 0 0 1.5px var(--yellow); }
+.tile.hot { box-shadow: inset 0 0 0 1.5px var(--green); }
+.tile.fav { box-shadow: none; }
+.quad .empty-star { display: flex; align-items: center; justify-content: center; font-size: 40px; color: var(--yellow); opacity: .7; }
+.star-edit svg { fill: none; stroke: var(--text); stroke-width: 1.8; stroke-linejoin: round; }
+.star-edit[aria-pressed="true"] { background: var(--yellow); }
+.star-edit[aria-pressed="true"] svg { fill: #262b6e; stroke: #262b6e; }
+.edit-hint {
+  max-width: 960px; margin: 8px auto 0; font-size: 12px; font-weight: 700;
+  background: var(--yellow); color: #262b6e; border-radius: 10px; padding: 7px 10px;
+}
+.cell { position: relative; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.cell img { -webkit-user-drag: none; pointer-events: none; }
+.cell .badge {
+  position: absolute; top: 3px; right: 5px; font-size: 16px; line-height: 1; color: var(--yellow);
+  text-shadow: 0 0 3px rgba(0, 0, 0, .6);
+}
+body.editing .cell { outline: 1.5px dashed rgba(255, 201, 64, .55); outline-offset: -3px; }
+.cell.unstarred { opacity: .45; }
+.menu {
+  position: fixed; z-index: 20; min-width: 190px; background: var(--text); color: #262b6e;
+  border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+}
+.menu button {
+  display: block; width: 100%; border: 0; background: none; text-align: left; font: inherit; font-weight: 700;
+  color: inherit; padding: 12px 14px; cursor: pointer;
+}
+.menu button + button { border-top: 1px solid rgba(38, 43, 110, .12); }
+.menu button:active { background: #e6e8ff; }

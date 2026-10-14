@@ -115,7 +115,22 @@ with db.conn() as c:
     c.execute("UPDATE galleries SET expires_at='2000-01-01 00:00:00'")
 assert core.get_gallery(gt) is None, "만료된 링크가 열림"
 
-# 7) 내부망 주소 차단
+# 7) 즐겨찾기: 사람마다 따로, 최근에 넣은 순, 삭제되면 같이 빠짐
+a_id, b_id = "111111111111111111", "222222222222222222"
+e1 = core.get_emoji("꾸벅")["id"]
+e2 = core.get_emoji("후다닥")["id"]
+core.set_favorite(a_id, e1, True)
+core.set_favorite(a_id, e2, True)
+assert [r["ename"] for r in core.favorites(a_id)][0] in ("후다닥", "꾸벅") and len(core.favorites(a_id)) == 2
+assert core.favorites(b_id) == [], "다른 사람 즐겨찾기가 보임"
+assert core.group_overview(a_id)[0]["key"] == "s"
+assert all(g["key"] != "s" for g in core.group_overview(b_id))
+assert core.group_overview(b_id, always_star=True)[0]["count"] == 0
+assert core.set_favorite(a_id, e1, False) is False and core.favorite_ids(a_id) == {e2}
+core.delete_emojis("emoji_id", e2)
+assert core.favorites(a_id) == [], "삭제된 이모티콘이 즐겨찾기에 남음"
+
+# 8) 내부망 주소 차단
 try:
     core.fetch("http://127.0.0.1/x.png")
     raise AssertionError("내부망 허용됨")

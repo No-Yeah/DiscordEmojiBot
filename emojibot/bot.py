@@ -185,9 +185,14 @@ async def cmd_send(inter: discord.Interaction, ename: str):
 async def ac_send(inter, current: str):
     if not await can_autocomplete(inter):
         return []
-    rows = await asyncio.to_thread(core.find, current) if current else await asyncio.to_thread(core.popular, 25)
-    return [Choice(name=f"{r['ename']}  ({r['pack']})" + (f"  #{r['tags']}" if r["tags"] else ""),
-                   value=r["ename"][:100]) for r in rows][:25]
+    ids = await asyncio.to_thread(core.favorite_ids, inter.user.id)
+    if current:
+        rows = await asyncio.to_thread(core.find, current)
+    else:  # 비어 있으면 내 즐겨찾기 먼저, 그다음 많이 쓴 것
+        stars = await asyncio.to_thread(core.favorites, inter.user.id)
+        rows = list(stars) + [r for r in await asyncio.to_thread(core.popular, 25) if r["id"] not in ids]
+    return [Choice(name=("★ " if r["id"] in ids else "") + f"{r['ename']}  ({r['pack']})"
+                   + (f"  #{r['tags']}" if r["tags"] else ""), value=r["ename"][:100]) for r in rows][:25]
 
 
 @e.command(name="find", description="웹 갤러리 열기: 그룹을 고르거나 검색해서 누르면 바로 전송")
@@ -212,9 +217,9 @@ HOME_ALL = 30    # 그룹이 이만큼 이하면 한 화면에 전부 (버튼 5�
 HOME_PAGE = 25   # 넘으면 25개씩 + 이전/다음
 
 
-async def pick_home_view(page=0):
+async def pick_home_view(page=0, discord_id=None):
     """그룹을 버튼으로 한 화면에 펼쳐 보여준다 (드롭다운은 25개 제한이라 쓰지 않음)."""
-    groups = await asyncio.to_thread(core.group_overview)
+    groups = await asyncio.to_thread(core.group_overview, discord_id)
     view = discord.ui.LayoutView(timeout=None)
     if not groups:
         view.add_item(discord.ui.TextDisplay("아직 등록된 이모티콘이 없습니다. `/e add-pack`으로 추가하세요."))
@@ -246,10 +251,10 @@ def pack_pages(rows, per):
     return pages
 
 
-async def pick_group_view(key, page, cols, anchor=None):
+async def pick_group_view(key, page, cols, anchor=None, discord_id=None):
     """anchor(이모티콘 id)를 주면 그 이모티콘이 들어 있는 쪽을 연다 (크기를 바꿀 때 위치 유지)."""
     cols = size_of(cols)
-    rows = await asyncio.to_thread(core.group_emojis, key)
+    rows = await asyncio.to_thread(core.group_emojis, key, discord_id)
     name = await asyncio.to_thread(core.group_name, key)
     view = discord.ui.LayoutView(timeout=None)
     if not rows or name is None:
@@ -257,8 +262,8 @@ async def pick_group_view(key, page, cols, anchor=None):
         view.add_item(discord.ui.ActionRow(HomeButton()))
         return view, None, []
     per = cols * cols
-    if key == "f":  # 자주 쓰는: 팩과 상관없이 많이 쓴 순서대로
-        pages = [("자주 쓰는", i, len(rows), rows[i:i + per]) for i in range(0, len(rows), per)]
+    if key in ("s", "f"):  # 즐겨찾기·자주 쓰는: 팩과 상관없이 넣은 순 / 많이 쓴 순
+        pages = [(name, i, len(rows), rows[i:i + per]) for i in range(0, len(rows), per)]
     else:
         pages = pack_pages(rows, per)
     if anchor is not None:
@@ -290,7 +295,7 @@ async def pick_group_view(key, page, cols, anchor=None):
 
 
 async def show_group(inter, key, page, cols, anchor=None):
-    view, file, nxt = await pick_group_view(key, page, cols, anchor)
+    view, file, nxt = await pick_group_view(key, page, cols, anchor, inter.user.id)
     await inter.response.edit_message(view=view, attachments=[file] if file else [])
     if nxt:
         asyncio.get_running_loop().run_in_executor(None, _prefetch, nxt, size_of(cols))
@@ -367,13 +372,13 @@ class HomeButton(discord.ui.DynamicItem[discord.ui.Button], template=r"ep:h"):
 
     async def callback(self, inter):
         if await allowed(inter):
-            await inter.response.edit_message(view=await pick_home_view(), attachments=[])
+            await inter.response.edit_message(view=await pick_home_view(discord_id=inter.user.id), attachments=[])
 
 
 class GroupButton(discord.ui.DynamicItem[discord.ui.Button], template=r"ep:gb:(?P<key>\w+)"):
     def __init__(self, key, label="그룹"):
-        style = discord.ButtonStyle.success if key == "f" else discord.ButtonStyle.secondary
-        super().__init__(discord.ui.Button(label=label[:80], style=style, emoji="⭐" if key == "f" else None,
+        style = {"s": discord.ButtonStyle.primary, "f": discord.ButtonStyle.success}.get(key, discord.ButtonStyle.secondary)
+        super().__init__(discord.ui.Button(label=label[:80], style=style, emoji={"s": "⭐", "f": "🔥"}.get(key),
                                            custom_id=f"ep:gb:{key}"))
         self.key = key
 
@@ -399,7 +404,7 @@ class HomePageButton(discord.ui.DynamicItem[discord.ui.Button], template=r"ep:hp
 
     async def callback(self, inter):
         if await allowed(inter):
-            await inter.response.edit_message(view=await pick_home_view(self.page), attachments=[])
+            await inter.response.edit_message(view=await pick_home_view(self.page, inter.user.id), attachments=[])
 
 
 class GroupSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"ep:gs:(?P<i>\d+)"):
@@ -444,7 +449,7 @@ async def cmd_pick(inter: discord.Interaction):
             return
         except discord.HTTPException as err:  # 개발자 포털에서 액티비티를 안 켰을 때 등
             log.warning("액티비티 실행 실패, 버튼 화면으로 대신 엽니다: %s", err)
-    await inter.response.send_message(view=await pick_home_view(), ephemeral=True)
+    await inter.response.send_message(view=await pick_home_view(discord_id=inter.user.id), ephemeral=True)
 
 
 @e.command(name="add-pack", description="카카오 이모티콘 팩 추가")

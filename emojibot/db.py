@@ -80,6 +80,13 @@ CREATE TABLE IF NOT EXISTS galleries(
   expires_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS favorites(
+  discord_id TEXT NOT NULL,
+  emoji_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (discord_id, emoji_id)
+);
+
 CREATE TABLE IF NOT EXISTS activity_sessions(
   token TEXT PRIMARY KEY,
   discord_id TEXT NOT NULL,

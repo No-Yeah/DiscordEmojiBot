@@ -1,5 +1,6 @@
 // 디스코드 액티비티: /e pick 으로 디스코드 앱 안에서 열리는 이모티콘 고르기 창
-//   1) 디스코드 로그인(최초 1회 동의) → 2) 그룹 칸(대표 2×2) → 3) 그룹의 모든 팩·이모티콘 스크롤 → 누르면 전송
+//   1) 디스코드 로그인(최초 1회 동의) → 2) 그룹 칸(★ 즐겨찾기, 🔥 자주 쓰는, 그룹들) → 3) 스크롤하며 누르면 전송
+//   이모티콘을 길게 누르면 메뉴(보내기 / 즐겨찾기), ★ 편집 버튼을 켜면 누를 때마다 즐겨찾기만 넣고 뺀다
 //   검색창에 입력하면 검색 화면, 지우면 원래 화면
 // 페이지를 연 것과 같은 URL Mapping("/" → 도메인/activity)을 그대로 탄다. (/.proxy 접두어는 쓰지 않음)
 const P = "";
@@ -11,6 +12,8 @@ const titleEl = document.getElementById("title");
 const backEl = document.getElementById("back");
 const qEl = document.getElementById("q");
 const toastEl = document.getElementById("toast");
+const editEl = document.getElementById("edit");
+const editHintEl = document.getElementById("edit-hint");
 
 // 모바일 디스코드는 창 위쪽에 앱 이름·나가기 버튼을 겹쳐 그린다 → 그만큼 내려서 그린다
 if (new URLSearchParams(location.search).get("platform") === "mobile") document.body.classList.add("mobile");
@@ -21,6 +24,7 @@ let mode = "home";   // home | group | search
 let group = null;
 let field = "all";
 let seq = 0;
+let editing = false;   // ★ 편집 모드: 누르면 보내지 않고 즐겨찾기만 넣고 뺀다
 
 function el(tag, props, ...children) {
   const node = Object.assign(document.createElement(tag), props || {});
@@ -84,7 +88,17 @@ function setMode(next) {
   backEl.hidden = mode !== "group";
   titleEl.hidden = mode !== "group";
   fieldsEl.hidden = mode !== "search";
+  editEl.hidden = mode === "home";
+  if (mode === "home") setEditing(false);
   if (mode !== "group") packsEl.replaceChildren();
+  closeMenu();
+}
+
+function setEditing(on) {
+  editing = on;
+  editEl.setAttribute("aria-pressed", String(on));
+  editHintEl.hidden = !on;
+  document.body.classList.toggle("editing", on);
 }
 
 // ---- 화면 1: 그룹 칸 ----
@@ -98,10 +112,13 @@ async function showHome() {
     if (!groups.length) return note("아직 등록된 이모티콘이 없어요.");
     listEl.replaceChildren(el("div", { className: "tiles" }, ...groups.map((g) => {
       const covers = g.covers.length >= 4 ? g.covers.slice(0, 4) : g.covers.slice(0, 1);
-      const quad = el("div", { className: "quad" + (covers.length === 1 ? " one" : "") },
-        ...covers.map((f) => el("img", { src: img(f), alt: "", loading: "lazy" })));
-      const btn = el("button", { type: "button", className: "tile" + (g.key === "f" ? " fav" : "") },
-        quad, el("b", { textContent: (g.key === "f" ? "⭐ " : "") + g.name }), el("span", { textContent: `${g.count}개` }));
+      const quad = covers.length
+        ? el("div", { className: "quad" + (covers.length === 1 ? " one" : "") },
+          ...covers.map((f) => el("img", { src: img(f), alt: "", loading: "lazy" })))
+        : el("div", { className: "quad one" }, el("span", { className: "empty-star", textContent: "★" }));
+      const mark = { s: "★ ", f: "🔥 " }[g.key] || "";
+      const btn = el("button", { type: "button", className: "tile" + ({ s: " star", f: " hot" }[g.key] || "") },
+        quad, el("b", { textContent: mark + g.name }), el("span", { textContent: `${g.count}개` }));
       btn.setAttribute("aria-label", `${g.name} 그룹 열기, ${g.count}개`);
       btn.addEventListener("click", () => showGroup(g));
       return btn;
@@ -122,7 +139,10 @@ async function showGroup(g) {
   try {
     const { items } = await api(`/items?group=${encodeURIComponent(g.key)}`);
     if (my !== seq) return;
-    render(items, g.key !== "f");
+    if (!items.length && g.key === "s") {
+      return note("아직 즐겨찾기가 없어요. 이모티콘을 길게 누르거나, 그룹 안에서 ★ 버튼을 켜고 눌러서 넣으세요.");
+    }
+    render(items, g.key !== "f" && g.key !== "s");
   } catch (e) {
     note(e.message);
   }
@@ -162,13 +182,80 @@ function render(items, byPack) {
   }));
 }
 
+// 짧게 누르기 = 보내기(편집 모드면 별표 토글), 길게 누르기 = 메뉴(보내기 / 즐겨찾기)
+const LONG_PRESS_MS = 500;
+const MOVE_CANCEL_PX = 10;   // 손가락이 이만큼 움직이면 스크롤로 보고 길게 누르기 취소
+
 function cell(it) {
   const btn = el("button", { type: "button", className: "cell", title: it.e },
-    el("img", { src: img(it.f), alt: "", loading: "lazy", decoding: "async" }));
-  btn.setAttribute("aria-label", `${it.e} 보내기`);
-  btn.addEventListener("click", () => send(btn, it));
+    el("img", { src: img(it.f), alt: "", loading: "lazy", decoding: "async", draggable: false }));
+  btn.dataset.id = it.i;
+  btn.setAttribute("aria-label", `${it.e} 보내기. 길게 누르면 즐겨찾기 메뉴`);
+  paintStar(btn, it.s);
+  let timer = null, startX = 0, startY = 0, longFired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  btn.addEventListener("pointerdown", (e) => {
+    longFired = false;
+    startX = e.clientX; startY = e.clientY;
+    timer = setTimeout(() => { longFired = true; timer = null; openMenu(btn, it); }, LONG_PRESS_MS);
+  });
+  btn.addEventListener("pointermove", (e) => {
+    if (timer && Math.hypot(e.clientX - startX, e.clientY - startY) > MOVE_CANCEL_PX) cancel();
+  });
+  ["pointerup", "pointercancel", "pointerleave"].forEach((t) => btn.addEventListener(t, cancel));
+  btn.addEventListener("contextmenu", (e) => { e.preventDefault(); if (!longFired) { longFired = true; openMenu(btn, it); } });
+  btn.addEventListener("click", (e) => {
+    if (longFired) { e.preventDefault(); longFired = false; return; }  // 길게 누른 뒤 손을 뗀 것은 클릭이 아님
+    closeMenu();
+    if (editing) toggleStar(it); else send(btn, it);
+  });
   return btn;
 }
+
+function paintStar(btn, on) {
+  let badge = btn.querySelector(".badge");
+  if (on && !badge) btn.append(el("span", { className: "badge", textContent: "★", ariaHidden: "true" }));
+  if (!on && badge) badge.remove();
+  btn.classList.toggle("unstarred", !on && group && group.key === "s" && mode === "group");
+}
+
+async function toggleStar(it) {
+  const on = !it.s;
+  try {
+    const { starred } = await api("/star", { id: it.i, on });
+    it.s = starred;
+    document.querySelectorAll(`.cell[data-id="${it.i}"]`).forEach((b) => paintStar(b, starred));
+    toast(starred ? `★ ${it.e} 즐겨찾기에 넣었어요` : `${it.e} 즐겨찾기에서 뺐어요`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function closeMenu() {
+  document.querySelectorAll(".menu").forEach((m) => m.remove());
+}
+
+function openMenu(btn, it) {
+  closeMenu();
+  if (navigator.vibrate) navigator.vibrate(10);
+  const menu = el("div", { className: "menu", role: "menu" },
+    el("button", { type: "button", role: "menuitem", textContent: `보내기  ${it.e}`,
+      onclick: () => { closeMenu(); send(btn, it); } }),
+    el("button", { type: "button", role: "menuitem", textContent: it.s ? "☆ 즐겨찾기에서 빼기" : "★ 즐겨찾기에 넣기",
+      onclick: () => { closeMenu(); toggleStar(it); } }));
+  document.body.append(menu);
+  const r = btn.getBoundingClientRect();
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  const left = Math.min(Math.max(8, r.left), innerWidth - w - 8);
+  const top = r.bottom + h + 8 < innerHeight ? r.bottom + 6 : Math.max(8, r.top - h - 6);
+  Object.assign(menu.style, { left: `${left}px`, top: `${top}px` });
+  menu.querySelector("button").focus();
+}
+
+// 메뉴 바깥을 누르거나 스크롤하면 메뉴를 닫는다
+document.addEventListener("pointerdown", (e) => { if (!e.target.closest(".menu")) closeMenu(); }, true);
+addEventListener("scroll", closeMenu, { passive: true });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
 
 async function send(btn, it) {
   if (btn.classList.contains("busy")) return;
@@ -197,5 +284,6 @@ fieldsEl.addEventListener("click", (e) => {
   search();
 });
 backEl.addEventListener("click", () => { group = null; qEl.value = ""; showHome(); });
+editEl.addEventListener("click", () => setEditing(!editing));
 
 start();

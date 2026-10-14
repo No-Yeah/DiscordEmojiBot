@@ -75,9 +75,9 @@ async function showHome() {
     listEl.replaceChildren(
       el("p", { className: "lead" }, "그룹을 고르세요. 위 검색창으로 바로 찾을 수도 있어요."),
       el("div", { className: "groups" }, ...data.groups.map((g) => {
-        const btn = el("button", { type: "button", className: "group" + (g.key === "f" ? " fav" : "") },
+        const btn = el("button", { type: "button", className: "group" + ({ s: " star", f: " hot" }[g.key] || "") },
           el("img", { src: `${base}/img/${g.cover}`, alt: "", loading: "lazy" }),
-          el("b", { textContent: g.name }),
+          el("b", { textContent: ({ s: "★ ", f: "🔥 " }[g.key] || "") + g.name }),
           el("span", { textContent: `${g.count}개` }));
         btn.addEventListener("click", () => showGroup(g));
         return btn;

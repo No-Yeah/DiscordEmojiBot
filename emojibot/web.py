@@ -28,28 +28,32 @@ db.init()
 
 
 class ActivityPaths:
-    """디스코드 액티비티 프록시가 /.proxy 접두어를 어떻게 넘기든 /activity/... 로 맞춘다.
-    (접두어를 떼고 넘기는 경우, /activity/.proxy/... 로 넘기는 경우, 도메인 루트의 /.proxy/... 로 넘기는 경우)"""
+    """디스코드 액티비티 프록시가 경로를 어떻게 넘기든 /activity/... 로 맞춘다.
+    - /.proxy 접두어를 붙인 채 넘기는 경우 (/activity/.proxy/x, /.proxy/x)
+    - URL Mapping 대상 끝에 / 가 있어 슬래시가 겹치는 경우 (/activity//x)
+    - /activity 가 두 번 붙는 경우 (/activity/activity/x)"""
 
     def __init__(self, wsgi):
         self.wsgi = wsgi
 
     def __call__(self, environ, start_response):
-        path = environ.get("PATH_INFO", "")
-        for prefix in ("/activity/.proxy/", "/.proxy/"):
+        path = re.sub(r"/{2,}", "/", environ.get("PATH_INFO", "") or "/")
+        for prefix in ("/activity/.proxy/", "/.proxy/", "/activity/activity/"):
             if path.startswith(prefix):
-                environ["PATH_INFO"] = "/activity/" + path[len(prefix):]
+                path = "/activity/" + path[len(prefix):]
                 break
+        environ["PATH_INFO"] = path
         return self.wsgi(environ, start_response)
 
 
 app.wsgi_app = ActivityPaths(app.wsgi_app)
+app.url_map.merge_slashes = False  # 겹친 슬래시는 위에서 직접 정리 (리다이렉트하지 않음)
 
 PAGE_SIZE = 30
 FILE_RE = re.compile(r"[0-9a-f]{32}\.(png|gif)")
 PUBLIC = {"login", "login_discord", "static", "gallery", "gallery_items", "gallery_groups", "gallery_img", "gallery_send",
           "activity", "activity_static", "activity_token", "activity_groups", "activity_items", "activity_img",
-          "activity_send"}
+          "activity_send", "activity_star"}
 _fails = {}  # ip -> (실패 횟수, 첫 실패 시각). ponytail: 워커 1개 기준 메모리 카운터
 
 
@@ -433,9 +437,9 @@ def gallery_items(token):
         return jsonify(error="링크가 만료됐어요. 디스코드에서 /e find 를 다시 써 주세요."), 410
     group = request.args.get("group")
     if group is not None:  # 그룹 화면: 그룹에 속한 모든 팩·이모티콘
-        if not (group in ("f", "n") or group.isdigit()):
+        if not core.valid_group_key(group):
             abort(400)
-        rows = core.group_emojis(group)
+        rows = core.group_emojis(group, row["discord_id"])
         total = len(rows)
     else:  # 검색 화면
         field = request.args.get("field", "all")
@@ -449,7 +453,7 @@ def gallery_groups(token):
     row = core.get_gallery(token)
     if row is None:
         return jsonify(error="링크가 만료됐어요. 디스코드에서 /e find 를 다시 써 주세요."), 410
-    return jsonify(seconds=core.seconds_left(row), groups=core.group_overview())
+    return jsonify(seconds=core.seconds_left(row), groups=core.group_overview(row["discord_id"]))
 
 
 @app.route("/g/<token>/img/<name>")
@@ -515,23 +519,32 @@ def activity_token():
 
 @app.route("/activity/groups")
 def activity_groups():
-    _activity_user()
-    return jsonify(groups=core.group_overview())
+    user = _activity_user()
+    return jsonify(groups=core.group_overview(user["discord_id"], always_star=True))
 
 
 @app.route("/activity/items")
 def activity_items():
-    _activity_user()
+    user = _activity_user()
     group = request.args.get("group")
     if group is not None:
-        if not (group in ("f", "n") or group.isdigit()):
+        if not core.valid_group_key(group):
             abort(400)
-        rows = core.group_emojis(group)
+        rows = core.group_emojis(group, user["discord_id"])
     else:
         field = request.args.get("field", "all")
         rows, _ = core.search(request.args.get("q", ""), field if field in core._SEARCH else "all", 0, 3000)
+    stars = core.favorite_ids(user["discord_id"])
     return jsonify(items=[{"i": r["id"], "e": r["ename"], "f": r["file"], "p": r["pack"],
-                           "k": r["kind"]} for r in rows])
+                           "k": r["kind"], "s": r["id"] in stars} for r in rows])
+
+
+@app.post("/activity/star")
+def activity_star():
+    if request.headers.get("X-Requested-With") != "fetch":
+        abort(400)
+    user = _activity_user()
+    return jsonify(starred=core.set_favorite(user["discord_id"], int(arg("id") or 0), bool(arg("on"))))
 
 
 @app.route("/activity/img/<name>")

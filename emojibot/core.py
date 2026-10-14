@@ -404,6 +404,7 @@ def delete_emojis(field, value):
         t = db.now()
         c.execute(f"UPDATE emojis SET deleted_at=? WHERE id IN ({q})", [t, *ids])
         c.execute(f"DELETE FROM emoji_tags WHERE emoji_id IN ({q})", ids)
+        c.execute(f"DELETE FROM favorites WHERE emoji_id IN ({q})", ids)
         # 남은 이모티콘이 없는 팩도 삭제 처리
         c.execute("UPDATE packs SET deleted_at=? WHERE deleted_at IS NULL AND NOT EXISTS "
                   "(SELECT 1 FROM emojis e WHERE e.pack_id=packs.id AND e.deleted_at IS NULL)", (t,))
@@ -477,8 +478,10 @@ def _covers(items, n=4):
     return out
 
 
-def group_overview():
-    """그룹별 이모티콘 수와 대표 이미지(최대 4개). 자주 쓰는 / 그룹 없음 포함."""
+def group_overview(discord_id=None, always_star=False):
+    """그룹별 이모티콘 수와 대표 이미지(최대 4개).
+    순서: ★ 즐겨찾기(이 사람 것) → 🔥 자주 쓰는 → 그룹들 → 그룹 없음.
+    즐겨찾기는 비어 있으면 빼고, always_star=True면 비어 있어도 넣는다(액티비티에서 추가하는 법을 보여주려고)."""
     with db.conn() as c:
         names = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM grp")}
         rows = c.execute("""SELECT pg.group_id gid, e.pack_id, e.file FROM emojis e
@@ -493,6 +496,12 @@ def group_overview():
         return {"key": key, "name": name, "count": len(items), "cover": covers[0], "covers": covers}
 
     out = []
+    if discord_id is not None:
+        stars = favorites(discord_id)
+        if stars or always_star:
+            covers = [r["file"] for r in stars[:4]]
+            out.append({"key": "s", "name": "즐겨찾기", "count": len(stars),
+                        "cover": covers[0] if covers else None, "covers": covers})
     fav = group_emojis("f")
     if fav:
         out.append(item("f", "자주 쓰는", [(i, r["file"]) for i, r in enumerate(fav)]))
@@ -504,16 +513,26 @@ def group_overview():
     return out
 
 
+SPECIAL_GROUPS = {"s": "즐겨찾기", "f": "자주 쓰는", "n": "그룹 없음"}
+
+
+def valid_group_key(key):
+    return key in SPECIAL_GROUPS or (key or "").isdigit()
+
+
 def group_name(key):
-    if key in ("f", "n"):
-        return {"f": "자주 쓰는", "n": "그룹 없음"}[key]
+    if key in SPECIAL_GROUPS:
+        return SPECIAL_GROUPS[key]
     with db.conn() as c:
         row = c.execute("SELECT name FROM grp WHERE id=?", (key,)).fetchone()
     return row["name"] if row else None
 
 
-def group_emojis(key):
-    """그룹에 속한 모든 이모티콘 (팩 순서, 팩 안 순서). 자주 쓰는 = 최근 30일 많이 쓴 25개."""
+def group_emojis(key, discord_id=None):
+    """그룹에 속한 모든 이모티콘 (팩 순서, 팩 안 순서).
+    s = 이 사람의 즐겨찾기(최근에 넣은 순), f = 자주 쓰는(최근 30일 많이 쓴 25개)."""
+    if key == "s":
+        return favorites(discord_id) if discord_id is not None else []
     if key == "f":
         return [r for r in popular(25, 30) if r["uses"]]
     if key == "n":
@@ -577,6 +596,33 @@ def _sheet(files, cols):
     # WebP: 투명 배경을 유지하면서 PNG보다 몇 배 작아 업로드가 빠르다
     sheet.save(out, "WEBP", quality=85, method=4)
     return out.getvalue()
+
+
+# ---------- 즐겨찾기 (사람마다 따로) ----------
+
+def favorites(discord_id):
+    """이 사람이 별표한 이모티콘, 최근에 넣은 순."""
+    with db.conn() as c:
+        return c.execute(f"""SELECT {_EMOJI_COLS} FROM favorites f JOIN emojis e ON e.id=f.emoji_id
+            JOIN packs p ON p.id=e.pack_id WHERE f.discord_id=? AND e.deleted_at IS NULL
+            ORDER BY f.created_at DESC, e.id DESC""", (str(discord_id),)).fetchall()
+
+
+def favorite_ids(discord_id):
+    with db.conn() as c:
+        return {r[0] for r in c.execute("SELECT emoji_id FROM favorites WHERE discord_id=?", (str(discord_id),))}
+
+
+def set_favorite(discord_id, emoji_id, on):
+    """즐겨찾기에 넣기(on=True) / 빼기(on=False). 바뀐 뒤 상태를 돌려준다."""
+    if get_emoji_by_id(emoji_id) is None:
+        raise UserError("삭제된 이모티콘이에요.")
+    with db.conn() as c:
+        if on:
+            c.execute("INSERT OR IGNORE INTO favorites VALUES (?,?,?)", (str(discord_id), int(emoji_id), db.now()))
+        else:
+            c.execute("DELETE FROM favorites WHERE discord_id=? AND emoji_id=?", (str(discord_id), int(emoji_id)))
+    return bool(on)
 
 
 def popular(limit=25, days=30):
