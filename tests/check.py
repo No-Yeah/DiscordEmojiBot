@@ -31,12 +31,23 @@ for bad in ("happy", "기쁨1", "기 쁨"):
         raise AssertionError(bad)
     except core.UserError:
         pass
-for bad in ("find", "a b", "-x", ""):
+for bad in ("", "   ", "a" * 61, "탭\x07문자"):
     try:
         core.check_name(bad, "이름")
         raise AssertionError(bad)
     except core.UserError:
         pass
+assert core.check_name("  눌어붙은커플누덩이(누덩이ver)  ", "팩 이름") == "눌어붙은커플누덩이(누덩이ver)"
+assert core.check_name("빈티지  고양이 5", "팩 이름") == "빈티지 고양이 5"
+try:
+    core.parse_groups("가,나") and core.check_name("가,나", "그룹명", allow_comma=False)
+    raise AssertionError("그룹명 쉼표 허용됨")
+except core.UserError:
+    pass
+
+# 카카오 제목 읽기
+assert core.parse_kakao_title('<title>삐뚤빼뚤 꽁쥐쓰 4 | 카카오 이모티콘샵</title>') == "삐뚤빼뚤 꽁쥐쓰 4"
+assert core.parse_kakao_title('<meta property="og:title" content="누덩이(ver) &amp; 친구">') == "누덩이(ver) & 친구"
 
 
 # 3) 이미지: 긴 변 180px, 움직이는 이미지는 GIF 유지 + 투명 유지
@@ -130,7 +141,34 @@ assert core.set_favorite(a_id, e1, False) is False and core.favorite_ids(a_id) =
 core.delete_emojis("emoji_id", e2)
 assert core.favorites(a_id) == [], "삭제된 이모티콘이 즐겨찾기에 남음"
 
-# 8) 내부망 주소 차단
+# 8) 팩 중복(같은 주소) 처리: 건너뛰기 / 덮어쓰기(+그룹 이어받기)
+real_pack, real_fetch = core.kakao_pack, core.fetch
+core.kakao_pack = lambda url: (core._clean_kakao_url(url), [f"https://img/{i}" for i in range(3)])
+core.fetch = lambda url, limit=core.MAX_BYTES: png(60, 60)
+U = "https://e.kakao.com/t/test-pack?t_obj=x"
+assert core.add_pack(U, "테스트 (팩)", "tester") == 3
+core.add_label("grp", "덮어쓰기그룹")
+with db.conn() as c:
+    old_pid = core.pack_by_url(c, core._clean_kakao_url(U))["id"]
+core.set_groups(old_pid, ["덮어쓰기그룹"])
+try:
+    core.add_pack(U, "다른 이름", "tester")
+    raise AssertionError("같은 주소가 그냥 등록됨")
+except core.DuplicatePack:
+    pass
+assert core.add_pack(U, "테스트 (팩)", "tester", replace=True, keep_groups=True) == 3
+with db.conn() as c:
+    new = core.pack_by_url(c, core._clean_kakao_url(U))
+    assert new["id"] != old_pid
+    assert c.execute("SELECT count(*) FROM packs WHERE url=? AND deleted_at IS NULL", (core._clean_kakao_url(U),)).fetchone()[0] == 1
+    assert [r[0] for r in c.execute("SELECT g.name FROM pack_grp pg JOIN grp g ON g.id=pg.group_id WHERE pack_id=?", (new["id"],))] == ["덮어쓰기그룹"]
+core.add_pack(U, "새 이름", "tester", replace=True, keep_groups=False)
+with db.conn() as c:
+    new = core.pack_by_url(c, core._clean_kakao_url(U))
+    assert new["name"] == "새 이름" and c.execute("SELECT count(*) FROM pack_grp WHERE pack_id=?", (new["id"],)).fetchone()[0] == 0
+core.kakao_pack, core.fetch = real_pack, real_fetch
+
+# 9) 내부망 주소 차단
 try:
     core.fetch("http://127.0.0.1/x.png")
     raise AssertionError("내부망 허용됨")

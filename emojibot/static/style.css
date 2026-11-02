@@ -230,3 +230,42 @@ tr.picked > td { background: rgba(255, 201, 64, .08); }
 .bulk b { font-family: var(--display); font-weight: 400; font-size: 20px; color: var(--yellow); }
 .btn.ghost { background: transparent; box-shadow: inset 0 0 0 1.5px var(--line); }
 @media (max-width: 860px) { .bulk { top: 8px; } }
+
+/* 팩 추가: 여러 주소 → 검수 목록 → 등록 */
+dialog.wide { width: min(820px, calc(100vw - 24px)); }
+textarea {
+  width: 100%; font: 14px/1.5 var(--body); color: var(--text); resize: vertical;
+  background: var(--bg); border: 1.5px solid var(--line); border-radius: 10px; padding: 9px 12px;
+}
+textarea:focus { border-color: var(--lilac); outline: none; }
+.pk-list { max-height: min(52vh, 460px); overflow: auto; border-radius: 12px; background: var(--bg); margin-top: 8px; }
+.pk-list table { min-width: 560px; }
+.pk-list thead th { position: sticky; top: 0; background: var(--raised); z-index: 1; }
+.pk-list td { vertical-align: top; }
+.pk-list th.chk, .pk-list td.chk { padding-right: 16px; }
+.pk-list th.num:first-child, .pk-list td.num:first-child { width: 48px; }
+.pk-name { display: flex; gap: 10px; align-items: flex-start; }
+.pk-name img { width: 44px; height: 44px; object-fit: contain; flex: none; border-radius: 8px; background: var(--panel); }
+.pk-name input { margin: 0; }
+.pk-note { font-size: 12px; margin-top: 4px; color: var(--muted); }
+.pk-note.warn { color: var(--yellow); }
+.pk-note.err { color: #ff9cc6; }
+.pk-note.ok { color: var(--green); }
+tr.pk-off td { opacity: .5; }
+.pk-actions { flex-wrap: wrap; }
+.pk-actions .spacer { flex: 1; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+.filter-chip { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1.5px var(--line); }
+.filter-chip[aria-pressed="true"] { background: var(--green); color: #1d2160; box-shadow: none; }
+/* 중복 팩 (같은 카카오 주소) */
+tr.pk-dup td { background: rgba(255, 201, 64, .07); }
+.dup-tag {
+  display: inline-block; font-size: 11px; font-weight: 700; color: #262b6e; background: var(--yellow);
+  border-radius: 6px; padding: 1px 6px; margin-right: 6px; vertical-align: 1px;
+}
+.dup-list { max-height: 160px; overflow: auto; margin: 8px 0; padding-left: 18px; font-size: 14px; }
+.dup-list li { margin: 2px 0; }
+.dup-choice { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.dup-choice label { display: flex; gap: 8px; align-items: center; margin: 0; color: var(--text); font-size: 14px; }
+.dup-choice label.sub { margin-left: 26px; color: var(--muted); }
+.dup-choice input { accent-color: var(--yellow); width: 16px; height: 16px; }

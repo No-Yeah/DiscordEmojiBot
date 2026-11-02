@@ -101,6 +101,8 @@ def admin_only(fn):
 
 @app.errorhandler(core.UserError)
 def user_error(e):
+    if isinstance(e, core.DuplicatePack):
+        return jsonify(error=str(e), code="duplicate"), 409
     return jsonify(error=str(e)), 400
 
 
@@ -210,9 +212,12 @@ def emojis():
     sort = sort if sort in SORTS else "no"
     direction = "asc" if request.args.get("dir", "asc") == "asc" else "desc"
     page = max(1, request.args.get("page", 1, type=int))
+    nogroup = request.args.get("nogroup") == "1"
     where, params = "", {"q": q}
+    if nogroup:  # 그룹이 하나도 없는 팩·단일만
+        where += " AND NOT EXISTS (SELECT 1 FROM pack_grp pg0 WHERE pg0.pack_id=p.id)"
     if q:
-        where = """AND (instr(lower(p.name), lower(:q)) OR instr(lower(ifnull(p.url,'')), lower(:q))
+        where += """ AND (instr(lower(p.name), lower(:q)) OR instr(lower(ifnull(p.url,'')), lower(:q))
           OR EXISTS (SELECT 1 FROM pack_grp pg JOIN grp g ON g.id=pg.group_id
                      WHERE pg.pack_id=p.id AND instr(lower(g.name), lower(:q)))
           OR EXISTS (SELECT 1 FROM emojis e WHERE e.pack_id=p.id AND e.deleted_at IS NULL AND (
@@ -242,12 +247,43 @@ def emojis():
         labels = {"tag": [r[0] for r in c.execute("SELECT name FROM tags ORDER BY name")],
                   "group": [r[0] for r in c.execute("SELECT name FROM grp ORDER BY lower(name)")]}
     return render_template("emojis.html", packs=packs, items=items, q=q, sort=sort, direction=direction,
-                           page=page, pages=pages, total=total, labels=labels)
+                           page=page, pages=pages, total=total, labels=labels, nogroup=nogroup)
+
+
+@app.post("/api/packs/preview")
+def api_packs_preview():
+    """여러 카카오 주소를 읽어 등록 전 검수 목록을 만든다 (아직 아무것도 등록하지 않음)."""
+    from concurrent.futures import ThreadPoolExecutor
+    urls = core.split_urls(arg("urls"))
+    if not urls:
+        raise core.UserError("카카오 이모티콘 주소를 한 줄에 하나씩 넣어 주세요.")
+    if len(urls) > 50:
+        raise core.UserError("한 번에 50개까지 불러올 수 있습니다.")
+
+    def one(u):
+        try:
+            return {"ok": True, **core.kakao_preview(u)}
+        except core.UserError as e:
+            return {"ok": False, "url": u, "error": str(e)}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        items = list(pool.map(one, urls))
+    seen_urls, seen_titles, out = set(), set(), []
+    for it in items:  # 같은 팩 주소가 두 번 들어온 경우 하나만
+        if it.get("ok") and it["url"] in seen_urls:
+            continue
+        if it.get("ok"):
+            seen_urls.add(it["url"])
+            it["dup_in_batch"] = it["title"].lower() in seen_titles
+            seen_titles.add(it["title"].lower())
+        out.append(it)
+    return ok(items=out)
 
 
 @app.post("/api/pack")
 def api_add_pack():
-    n = core.add_pack(arg("url"), arg("name"), g.me["name"])
+    n = core.add_pack(arg("url"), arg("name"), g.me["name"],
+                      replace=bool(arg("replace")), keep_groups=bool(arg("keep_groups")))
     return ok(count=n)
 
 

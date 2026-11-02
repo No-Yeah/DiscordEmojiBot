@@ -14,7 +14,8 @@ function toast(msg, isError) {
   el.className = "toast" + (isError ? " err" : "");
   el.setAttribute("role", "status");
   el.textContent = msg;
-  document.body.appendChild(el);
+  // 대화상자가 열려 있으면 그 안에 띄워야 어두운 배경에 가려지지 않는다
+  (document.querySelector("dialog[open]") || document.body).appendChild(el);
   setTimeout(() => el.remove(), isError ? 5000 : 2500);
 }
 
@@ -268,4 +269,188 @@ if (bulk) {
     });
   });
   refresh();
+}
+
+// 팩 추가: 주소 여러 개 → 불러오기(제목·수 검수) → 체크한 것만 / 체크한 것 빼고 / 전체 등록
+const pk = document.getElementById("dlg-pack");
+if (pk) {
+  const $ = (id) => document.getElementById(id);
+  const step1 = $("pk-step1"), step2 = $("pk-step2"), rowsEl = $("pk-rows"), allBox = $("pk-all");
+  const actionBtns = [...pk.querySelectorAll("[data-pk], #pk-back")];
+  let items = [], running = false, stopRequested = false, registered = 0;
+
+  const note = (row, text, cls) => {
+    const n = row.querySelector(".pk-note");
+    n.textContent = text;
+    n.className = "pk-note" + (cls ? " " + cls : "");
+  };
+  const showStep = (n) => { step1.hidden = n !== 1; step2.hidden = n !== 2; };
+
+  function warningOf(it) {
+    if (!it.ok) return [it.error, "err"];
+    if (it.registered_as) {
+      const g = it.registered_groups && it.registered_groups.length ? ` · 그룹: ${it.registered_groups.join(", ")}` : "";
+      return [`중복: 같은 주소의 팩이 '${it.registered_as}' 이름으로 이미 등록돼 있습니다${g}. 등록할 때 덮어쓸지 건너뛸지 고릅니다.`, "warn"];
+    }
+    if (it.name_taken) return ["같은 이름의 팩이 이미 있습니다. 이름을 바꿔 주세요.", "warn"];
+    if (it.dup_in_batch) return ["목록 안에 같은 이름이 또 있습니다. 이름을 바꿔 주세요.", "warn"];
+    return ["", ""];
+  }
+
+  function render() {
+    rowsEl.replaceChildren(...items.map((it, i) => {
+      const tr = document.createElement("tr");
+      const box = Object.assign(document.createElement("input"), { type: "checkbox", disabled: !it.ok });
+      box.setAttribute("aria-label", `${it.title || it.url} 체크`);
+      const name = Object.assign(document.createElement("input"), {
+        type: "text", value: it.title || it.url, maxLength: 60, disabled: !it.ok,
+      });
+      name.setAttribute("aria-label", `${i + 1}번 팩 이름`);
+      name.addEventListener("input", () => { it.title = name.value; });
+      const img = it.ok ? Object.assign(document.createElement("img"), { src: it.cover, alt: "", referrerPolicy: "no-referrer", loading: "lazy" }) : null;
+      if (img) img.onerror = () => img.remove();
+      const nameCell = document.createElement("td");
+      const wrap = document.createElement("div");
+      wrap.className = "pk-name";
+      const col = document.createElement("div");
+      col.style.flex = "1";
+      col.append(name, Object.assign(document.createElement("div"), { className: "pk-note" }));
+      if (img) wrap.append(img);
+      wrap.append(col);
+      nameCell.append(wrap);
+      tr.append(Object.assign(document.createElement("td"), { className: "num", textContent: i + 1 }), nameCell,
+        Object.assign(document.createElement("td"), { className: "num", textContent: it.ok ? `${it.count}개` : "-" }),
+        Object.assign(document.createElement("td"), { className: "chk" }));
+      tr.lastChild.append(box);
+      if (!it.ok) tr.classList.add("pk-off");
+      if (it.registered_as) {
+        tr.classList.add("pk-dup");
+        col.prepend(Object.assign(document.createElement("span"), { className: "dup-tag", textContent: "중복" }));
+      }
+      it.row = tr; it.box = box; it.input = name;
+      const [msg, cls] = warningOf(it);
+      note(tr, msg, cls);
+      box.addEventListener("change", syncAll);
+      return tr;
+    }));
+    const okCount = items.filter((x) => x.ok).length;
+    const total = items.reduce((n, x) => n + (x.ok ? x.count : 0), 0);
+    $("pk-summary").textContent = `${items.length}개 중 ${okCount}개 불러옴, 이모티콘 ${total}개. 이름을 확인하고 등록하세요.`
+      + (okCount < items.length ? " (불러오지 못한 주소는 등록되지 않습니다)" : "");
+    syncAll();
+  }
+
+  // 중복(같은 주소) 팩이 섞여 있으면: 건너뛰기 / 덮어쓰기(+그룹 이어받기) 중 고른다
+  function askDuplicate(dups, total) {
+    const dlg = $("dlg-dup"), keep = $("dup-keep");
+    $("dup-desc").textContent = `등록하려는 ${total}개 중 ${dups.length}개는 같은 주소의 팩이 이미 있습니다.`;
+    $("dup-list").replaceChildren(...dups.map((x) => Object.assign(document.createElement("li"), {
+      textContent: `${x.input.value}  ← 기존 '${x.registered_as}'`
+        + (x.registered_groups && x.registered_groups.length ? ` (그룹: ${x.registered_groups.join(", ")})` : ""),
+    })));
+    dlg.querySelector('input[value="skip"]').checked = true;
+    keep.checked = true; keep.disabled = true;
+    dlg.querySelectorAll('input[name="dup-mode"]').forEach((r) => {
+      r.onchange = () => { keep.disabled = dlg.querySelector('input[name="dup-mode"]:checked').value !== "replace"; };
+    });
+    dlg.showModal();
+    return new Promise((resolve) => {
+      const done = (v) => { dlg.close(); resolve(v); };
+      $("dup-ok").onclick = () => {
+        const mode = dlg.querySelector('input[name="dup-mode"]:checked').value;
+        done({ mode, keep: mode === "replace" && keep.checked });
+      };
+      $("dup-cancel").onclick = () => done(null);
+      dlg.oncancel = (e) => { e.preventDefault(); done(null); };
+    });
+  }
+
+  function syncAll() {
+    const boxes = items.filter((x) => x.ok).map((x) => x.box);
+    const n = boxes.filter((b) => b.checked).length;
+    allBox.checked = n > 0 && n === boxes.length;
+    allBox.indeterminate = n > 0 && n < boxes.length;
+  }
+  allBox.addEventListener("change", () => {
+    items.forEach((x) => { if (x.ok && !x.done) x.box.checked = allBox.checked; });
+    syncAll();
+  });
+
+  $("pk-load").addEventListener("click", async () => {
+    const btn = $("pk-load");
+    btn.disabled = true;
+    btn.textContent = "불러오는 중…";
+    try {
+      const r = await api("/api/packs/preview", { urls: $("pk-urls").value });
+      items = r.items;
+      registered = 0;
+      render();
+      showStep(2);
+    } catch (e) { /* api()가 이미 알림을 띄움 */ }
+    btn.disabled = false;
+    btn.textContent = "불러오기";
+  });
+  $("pk-back").addEventListener("click", () => showStep(1));
+
+  // 한 팩씩 차례로 등록한다 (오래 걸려도 끊기지 않고, 줄마다 진행 상황이 보인다)
+  pk.querySelectorAll("[data-pk]").forEach((btn) => btn.addEventListener("click", async () => {
+    const mode = btn.dataset.pk;
+    let targets = items.filter((x) => x.ok && !x.done
+      && (mode === "all" || (mode === "only" ? x.box.checked : !x.box.checked)));
+    if (!targets.length) return toast(mode === "only" ? "먼저 등록할 팩을 체크하세요." : "등록할 팩이 없습니다.", true);
+    const dups = targets.filter((x) => x.registered_as);
+    let choice = { mode: "none", keep: false };
+    if (dups.length) {
+      choice = await askDuplicate(dups, targets.length);
+      if (!choice) return;
+      if (choice.mode === "skip") {
+        dups.forEach((x) => note(x.row, "건너뜀 (중복: 같은 주소의 팩이 이미 있음)", "warn"));
+        targets = targets.filter((x) => !x.registered_as);
+        if (!targets.length) return toast("중복을 빼고 나니 등록할 팩이 없습니다.", true);
+      }
+    } else if (!confirm(`팩 ${targets.length}개를 등록할까요?`)) return;
+    running = true; stopRequested = false;
+    actionBtns.forEach((b) => { b.disabled = true; });
+    targets.forEach((x) => note(x.row, "대기 중", ""));
+    for (const it of targets) {
+      if (stopRequested) { note(it.row, "취소됨", "warn"); continue; }
+      note(it.row, "등록 중… (이미지를 받는 데 시간이 걸립니다)", "");
+      it.input.disabled = true;
+      try {
+        const r = await fetch("/api/pack", {
+          method: "POST",
+          headers: { "X-Requested-With": "fetch", "Content-Type": "application/json" },
+          body: JSON.stringify({ url: it.url, name: it.input.value,
+            replace: !!it.registered_as && choice.mode === "replace", keep_groups: !!it.registered_as && choice.keep }),
+        });
+        const data = await r.json().catch(() => ({ error: `서버 응답 오류 (${r.status})` }));
+        if (!r.ok || data.error) throw new Error(data.error || "등록하지 못했습니다.");
+        it.done = true; registered++;
+        it.box.checked = false; it.box.disabled = true;
+        it.row.classList.add("pk-off");
+        note(it.row, it.registered_as ? `✓ 덮어쓰기 완료 (${data.count}개${choice.keep ? ", 그룹 이어받음" : ""})`
+          : `✓ 등록 완료 (${data.count}개)`, "ok");
+        it.registered_as = null;
+      } catch (e) {
+        it.input.disabled = false;
+        note(it.row, `✗ ${e.message}`, "err");
+      }
+    }
+    running = false;
+    actionBtns.forEach((b) => { b.disabled = false; });
+    syncAll();
+    const failed = targets.filter((x) => !x.done && !stopRequested).length;
+    toast(`등록 완료 ${targets.filter((x) => x.done).length}개` + (failed ? `, 실패 ${failed}개 (이름을 고쳐 다시 등록할 수 있어요)` : ""), failed > 0);
+  }));
+
+  $("pk-cancel").addEventListener("click", () => {
+    if (running) { stopRequested = true; toast("지금 등록 중인 팩까지만 하고 멈춥니다."); return; }
+    pk.close();
+  });
+  pk.addEventListener("close", () => {
+    if (registered) reloadWith(`팩 ${registered}개를 등록했습니다.`);
+    showStep(1);
+    items = []; rowsEl.replaceChildren();
+  });
+  pk.addEventListener("cancel", (e) => { if (running) { e.preventDefault(); stopRequested = true; } });
 }

@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import urllib.parse
 import urllib.request
+import unicodedata
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta
@@ -25,9 +26,7 @@ MAX_BYTES = 10 * 1024 * 1024
 MAX_FRAMES = 400
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
 
-COMMANDS = ("add-pack", "add", "find", "del-pack", "del", "web", "help")
 TAG_RE = re.compile(r"[가-힣]+")
-NAME_RE = re.compile(r"[\w\-]{1,40}")
 KAKAO_IMG = re.compile(r"https://item\.kakaocdn\.net/do/([0-9a-f]{32})[0-9a-f]{32}(?![0-9a-f])")
 
 
@@ -37,13 +36,26 @@ class UserError(ValueError):
 
 # ---------- 입력 검증 ----------
 
-def check_name(value, what):
-    value = (value or "").strip()
-    if not NAME_RE.fullmatch(value) or value.startswith("-"):
-        raise UserError(f"{what}은 공백 없이 1~40자(한글, 영문, 숫자, _, -)로 입력하세요: {value or '(비어 있음)'}")
-    if value.lower() in COMMANDS:
-        raise UserError(f"'{value}'는 명령어라서 {what}으로 쓸 수 없습니다.")
+NAME_MAX = 60
+
+
+def check_name(value, what, allow_comma=True):
+    """이름 규칙: 앞뒤 공백 제거, 연속 공백은 하나로, 1~60자, 제어문자 금지.
+    공백·괄호·특수문자는 허용한다. 그룹명은 쉼표로 여러 개를 구분하므로 쉼표만 금지."""
+    value = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not value:
+        raise UserError(f"{what}을 입력하세요.")
+    if len(value) > NAME_MAX:
+        raise UserError(f"{what}은 {NAME_MAX}자까지 쓸 수 있습니다 (지금 {len(value)}자): {value}")
+    if any(unicodedata.category(ch)[0] == "C" for ch in value):
+        raise UserError(f"{what}에 쓸 수 없는 글자(제어 문자)가 들어 있습니다.")
+    if not allow_comma and "," in value:
+        raise UserError(f"{what}에는 쉼표(,)를 쓸 수 없습니다. 쉼표는 여러 개를 구분할 때 씁니다: {value}")
     return value
+
+
+def is_blank(value):
+    return str(value or "").strip() in ("", "-")
 
 
 def split_list(value):
@@ -68,7 +80,7 @@ def parse_tags(value):
 
 
 def parse_groups(value):
-    return [check_name(g, "그룹명") for g in split_list(value)]
+    return [check_name(g, "그룹명", allow_comma=False) for g in split_list(value)]
 
 
 # ---------- 외부 요청 ----------
@@ -126,11 +138,57 @@ def parse_kakao(html):
     return [u for u in urls if KAKAO_IMG.match(u).group(1) == prefix]
 
 
-def kakao_pack(url):
+_META_TITLE = re.compile(r'<meta[^>]+property=["\']og:title["\'][^>]*content=["\']([^"\']*)["\']', re.I)
+_META_TITLE2 = re.compile(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]*property=["\']og:title["\']', re.I)
+_TITLE_TAG = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def parse_kakao_title(html):
+    """상세 페이지의 이모티콘 팩 제목. og:title → <title> 순. 사이트 이름 꼬리표는 뗀다."""
+    import html as htmllib
+    for rx in (_META_TITLE, _META_TITLE2, _TITLE_TAG):
+        m = rx.search(html)
+        if m and m.group(1).strip():
+            title = htmllib.unescape(m.group(1))
+            title = re.split(r"\s+[|\-–]\s+(카카오\s*이모티콘|Kakao|이모티콘\s*샵)", title, maxsplit=1, flags=re.I)[0]
+            return re.sub(r"\s+", " ", title).strip()[:NAME_MAX]
+    return ""
+
+
+def _clean_kakao_url(url):
     p = urllib.parse.urlparse((url or "").strip())
-    if p.scheme != "https" or p.hostname != "e.kakao.com" or not p.path.startswith("/t/"):
-        raise UserError("카카오 이모티콘 주소(https://e.kakao.com/t/...)를 입력하세요.")
-    clean = f"https://e.kakao.com{p.path}"
+    if p.scheme not in ("http", "https") or p.hostname != "e.kakao.com" or not p.path.startswith("/t/"):
+        raise UserError("카카오 이모티콘 주소(https://e.kakao.com/t/...)가 아닙니다.")
+    return f"https://e.kakao.com{p.path.rstrip('/')}"
+
+
+def split_urls(text):
+    """여러 줄·공백·쉼표로 섞여 들어온 주소들을 순서대로, 중복 없이."""
+    out = []
+    for u in re.split(r"[\s,]+", text or ""):
+        if u and u not in out:
+            out.append(u)
+    return out
+
+
+def kakao_preview(url):
+    """등록 전 검수용: 제목, 이모티콘 수, 대표 이미지 주소, 이미 등록됐는지."""
+    clean = _clean_kakao_url(url)
+    html = fetch(clean).decode("utf-8", "replace")
+    images = parse_kakao(html)
+    title = parse_kakao_title(html) or clean.rsplit("/", 1)[-1]
+    with db.conn() as c:
+        same = pack_by_url(c, clean)  # 중복 기준: 같은 카카오 주소
+        groups = [r[0] for r in c.execute("SELECT g.name FROM pack_grp pg JOIN grp g ON g.id=pg.group_id "
+                                          "WHERE pg.pack_id=? ORDER BY g.name", (same["id"],))] if same else []
+        name_taken = _pack_name_taken(c, title, same["id"] if same else None)
+    return {"url": clean, "title": title, "count": len(images), "cover": images[0],
+            "registered_as": same["name"] if same else None, "registered_groups": groups,
+            "name_taken": name_taken}
+
+
+def kakao_pack(url):
+    clean = _clean_kakao_url(url)
     return clean, parse_kakao(fetch(clean).decode("utf-8", "replace"))
 
 
@@ -231,19 +289,46 @@ def _set_tags(c, emoji_id, tags):
     c.executemany("INSERT INTO emoji_tags VALUES (?,?)", [(emoji_id, t) for t in ids])
 
 
-def add_pack(url, name, add_user):
-    """카카오 팩을 받아 name-1, name-2 ... 로 등록. 추가된 개수를 돌려준다."""
-    name = check_name(name, "팩 이름")
+class DuplicatePack(UserError):
+    """같은 카카오 주소의 팩이 이미 있음. 덮어쓰기(replace=True)나 건너뛰기를 골라야 한다."""
+
+
+def pack_by_url(c, clean_url):
+    return c.execute("SELECT id, name FROM packs WHERE kind='pack' AND deleted_at IS NULL AND url=?",
+                     (clean_url,)).fetchone()
+
+
+def add_pack(url, name, add_user, replace=False, keep_groups=False):
+    """카카오 팩을 받아 name-1, name-2 ... 로 등록. 추가된 개수를 돌려준다.
+    name 을 비우면 카카오 페이지의 팩 제목을 쓴다.
+    같은 주소의 팩이 이미 있으면(중복 기준 = 주소) replace=True 일 때만 기존 팩을 지우고 새로 넣는다.
+    keep_groups=True 면 기존 팩에 붙어 있던 그룹을 새 팩에 그대로 붙인다."""
+    clean = _clean_kakao_url(url)
     with db.conn() as c:
-        if _pack_name_taken(c, name):
+        old = pack_by_url(c, clean)
+    if old and not replace:
+        raise DuplicatePack(f"이미 '{old['name']}' 이름으로 등록된 팩입니다 (같은 주소).")
+    if is_blank(name):
+        name = kakao_preview(clean)["title"]
+    name = check_name(name, "팩 이름")
+    old_id = old["id"] if old else None
+    with db.conn() as c:
+        if _pack_name_taken(c, name, old_id):
             raise UserError(f"이미 있는 팩 이름입니다: {name}")
-    clean, urls = kakao_pack(url)
+    clean, urls = kakao_pack(clean)
     enames = [f"{name}-{i}" for i in range(1, len(urls) + 1)]
-    files = []
+    files, old_files = [], []
     try:
         for u in urls:
             files.append(_save_image(fetch(u)))
         with db.conn() as c:
+            old = pack_by_url(c, clean) if replace else None  # 받는 동안 바뀌었을 수 있어 다시 확인
+            old_id = old["id"] if old else None
+            group_ids = [r[0] for r in c.execute("SELECT group_id FROM pack_grp WHERE pack_id=?", (old_id,))] \
+                if old_id and keep_groups else []
+            if old_id:  # 덮어쓰기: 기존 팩을 먼저 지운다 (같은 이름을 다시 쓸 수 있게)
+                old_files = _soft_delete(c, [r[0] for r in c.execute(
+                    "SELECT id FROM emojis WHERE pack_id=? AND deleted_at IS NULL", (old_id,))])
             if _pack_name_taken(c, name):
                 raise UserError(f"이미 있는 팩 이름입니다: {name}")
             taken = _ename_taken(c, enames)
@@ -254,15 +339,17 @@ def add_pack(url, name, add_user):
                             (name, clean, t, add_user)).lastrowid
             c.executemany("INSERT INTO emojis(pack_id,ename,file,seq,add_date) VALUES (?,?,?,?,?)",
                           [(pid, e, f, i, t) for i, (e, f) in enumerate(zip(enames, files), 1)])
+            c.executemany("INSERT INTO pack_grp VALUES (?,?)", [(pid, g) for g in group_ids])
     except BaseException:
         _remove_files(files)
         raise
+    _remove_files(old_files)  # 기존 팩 이미지는 새 팩이 확실히 들어간 뒤에 지운다
     return len(files)
 
 
 def add_single(ename, data, add_user, name=None, groups=None, tags=None):
     ename = check_name(ename, "이모티콘 이름")
-    name = check_name(name, "이름") if split_list(name) else ename
+    name = ename if is_blank(name) else check_name(name, "이름")
     groups, tags = parse_groups(groups), parse_tags(tags)
     with db.conn() as c:
         if _ename_taken(c, [ename]):
@@ -341,7 +428,7 @@ def rename_pack(pack_id, new):
 
 def add_label(table, name):
     """table: 'tags' 또는 'grp'"""
-    name = parse_tags(name)[0] if table == "tags" else check_name(name, "그룹명")
+    name = parse_tags(name)[0] if table == "tags" else check_name(name, "그룹명", allow_comma=False)
     try:
         with db.conn() as c:
             c.execute(f"INSERT INTO {table}(name) VALUES (?)", (name,))
@@ -350,7 +437,7 @@ def add_label(table, name):
 
 
 def rename_label(table, label_id, new):
-    new = (parse_tags(new) or [""])[0] if table == "tags" else check_name(new, "그룹명")
+    new = (parse_tags(new) or [""])[0] if table == "tags" else check_name(new, "그룹명", allow_comma=False)
     if not new:
         raise UserError("새 이름을 입력하세요.")
     try:
@@ -393,21 +480,27 @@ def count_targets(field, value):
         return len(c.execute(_TARGET_SQL[field], (value,)).fetchall())
 
 
+def _soft_delete(c, ids):
+    """같은 트랜잭션 안에서 이모티콘 삭제 처리(삭제 시각만 남김). 지울 이미지 파일 목록을 돌려준다."""
+    if not ids:
+        return []
+    q = ",".join("?" * len(ids))
+    files = [r["file"] for r in c.execute(f"SELECT file FROM emojis WHERE id IN ({q})", ids)]
+    t = db.now()
+    c.execute(f"UPDATE emojis SET deleted_at=? WHERE id IN ({q})", [t, *ids])
+    c.execute(f"DELETE FROM emoji_tags WHERE emoji_id IN ({q})", ids)
+    c.execute(f"DELETE FROM favorites WHERE emoji_id IN ({q})", ids)
+    # 남은 이모티콘이 없는 팩도 삭제 처리
+    c.execute("UPDATE packs SET deleted_at=? WHERE deleted_at IS NULL AND NOT EXISTS "
+              "(SELECT 1 FROM emojis e WHERE e.pack_id=packs.id AND e.deleted_at IS NULL)", (t,))
+    return files
+
+
 def delete_emojis(field, value):
     """field: emoji | name | tag | group | pack_id | emoji_id. 지운 개수를 돌려준다."""
     with db.conn() as c:
         ids = [r["id"] for r in c.execute(_TARGET_SQL[field], (value,))]
-        if not ids:
-            return 0
-        q = ",".join("?" * len(ids))
-        files = [r["file"] for r in c.execute(f"SELECT file FROM emojis WHERE id IN ({q})", ids)]
-        t = db.now()
-        c.execute(f"UPDATE emojis SET deleted_at=? WHERE id IN ({q})", [t, *ids])
-        c.execute(f"DELETE FROM emoji_tags WHERE emoji_id IN ({q})", ids)
-        c.execute(f"DELETE FROM favorites WHERE emoji_id IN ({q})", ids)
-        # 남은 이모티콘이 없는 팩도 삭제 처리
-        c.execute("UPDATE packs SET deleted_at=? WHERE deleted_at IS NULL AND NOT EXISTS "
-                  "(SELECT 1 FROM emojis e WHERE e.pack_id=packs.id AND e.deleted_at IS NULL)", (t,))
+        files = _soft_delete(c, ids)
     _remove_files(files)
     return len(ids)
 

@@ -452,19 +452,223 @@ async def cmd_pick(inter: discord.Interaction):
     await inter.response.send_message(view=await pick_home_view(discord_id=inter.user.id), ephemeral=True)
 
 
-@e.command(name="add-pack", description="카카오 이모티콘 팩 추가")
+class AddPackView(discord.ui.View):
+    """제목을 보여주고 확인받은 뒤 등록. 같은 주소의 팩이 이미 있으면 덮어쓸지(그룹 이어받기 여부)·건너뛸지 고른다."""
+
+    def __init__(self, url, name, owner_id, duplicate):
+        super().__init__(timeout=300)
+        self.url, self.name, self.owner_id = url, name, owner_id
+        if duplicate:
+            choices = [("기존 팩 지우고 추가 (그룹 이어받기)", discord.ButtonStyle.success, (True, True)),
+                       ("기존 팩 지우고 추가 (그룹 없이)", discord.ButtonStyle.primary, (True, False)),
+                       ("건너뛰기", discord.ButtonStyle.secondary, None)]
+        else:
+            choices = [("이대로 추가", discord.ButtonStyle.success, (False, False)),
+                       ("취소", discord.ButtonStyle.secondary, None)]
+        for label, style, opt in choices:
+            btn = discord.ui.Button(label=label, style=style)
+            btn.callback = self._make(opt)
+            self.add_item(btn)
+
+    def _make(self, opt):
+        async def cb(inter):
+            if inter.user.id != self.owner_id or not await allowed(inter):
+                return
+            if opt is None:
+                return await inter.response.edit_message(content="팩 추가를 건너뛰었습니다.", embed=None, view=None,
+                                                         delete_after=NOTICE_SECONDS)
+            replace, keep = opt
+            await inter.response.edit_message(
+                content=f"⏳ '{self.name}' 팩을 추가하는 중… (이미지를 받는 데 시간이 걸립니다)", embed=None, view=None)
+            try:
+                n = await asyncio.to_thread(core.add_pack, self.url, self.name, inter.user.name, replace, keep)
+            except core.UserError as err:
+                return await inter.edit_original_response(content=f"⚠️ {err}")
+            done = "덮어썼습니다" + (" (그룹 이어받음)" if keep else "") if replace else "추가했습니다"
+            await inter.edit_original_response(content=f"✅ '{self.name}' 팩을 {done}. 이모티콘 {n}개")
+        return cb
+
+
+@e.command(name="add-pack", description="카카오 이모티콘 팩 추가 (제목은 자동으로 읽어옴)")
 @app_commands.rename(url="카카오주소", name="팩이름")
-@app_commands.describe(url="https://e.kakao.com/t/... 주소", name="팩 이름 (이모티콘마다 팩이름-1, 팩이름-2 … 로 붙음)")
-async def cmd_add_pack(inter: discord.Interaction, url: str, name: str):
+@app_commands.describe(url="https://e.kakao.com/t/... 주소",
+                       name="비우면 카카오 페이지의 팩 제목을 그대로 씀 (이모티콘마다 이름-1, 이름-2 … 로 붙음)")
+async def cmd_add_pack(inter: discord.Interaction, url: str, name: str | None = None):
     await inter.response.defer(ephemeral=True, thinking=True)
-    n = await asyncio.to_thread(core.add_pack, url, name, inter.user.name)
-    await reply(inter, f"✅ '{name}' 팩을 추가했습니다. ({name}-1 ~ {name}-{n})", fade=True)
-    await show_gallery(inter, name, "name", intro=f"방금 추가한 '{name}' 팩")
+    info = await asyncio.to_thread(core.kakao_preview, url)
+    name = core.check_name(name or info["title"], "팩 이름")
+    lines = [f"**{name}**  ·  이모티콘 {info['count']}개"]
+    if info["registered_as"]:
+        groups = f" (그룹: {', '.join(info['registered_groups'])})" if info["registered_groups"] else ""
+        lines.append(f"⚠️ **중복**: 같은 주소의 팩이 '{info['registered_as']}' 이름으로 이미 있습니다{groups}.")
+        lines.append("기존 팩을 지우고 새로 넣을지, 건너뛸지 골라 주세요. 덮어쓰면 기존 이모티콘의 태그·즐겨찾기는 사라집니다.")
+    else:
+        if info["name_taken"] and name == info["title"]:
+            lines.append("⚠️ 같은 이름의 팩이 이미 있어 추가되지 않습니다. `팩이름` 칸에 다른 이름을 넣어 다시 써 주세요.")
+        lines.append("이대로 추가할까요?")
+    embed = discord.Embed(description="\n".join(lines), color=0xFFC940)
+    embed.set_thumbnail(url=info["cover"])
+    await inter.followup.send(embed=embed, view=AddPackView(info["url"], name, inter.user.id, bool(info["registered_as"])), ephemeral=True)
+
+
+# ---------- /e add-packs: 여러 팩 한꺼번에 ----------
+# 디스코드의 여러 개 고르기 메뉴는 25개까지라 한 번에 25팩까지 받는다. 이름은 카카오 제목을 그대로 쓰고,
+# 고칠 게 있으면 등록 후 웹에서 바꾼다. 중복(같은 주소) 처리는 웹·/e add-pack 과 같은 세 가지 중 고른다.
+BULK_MAX = 25
+DUP_POLICIES = {"skip": ("중복은 건너뛰기", None),
+                "replace_keep": ("기존 팩 지우고 추가 (그룹 이어받기)", (True, True)),
+                "replace": ("기존 팩 지우고 추가 (그룹 없이)", (True, False))}
+
+
+def _bulk_lines(items, status=None):
+    lines = []
+    for i, it in enumerate(items, 1):
+        if not it["ok"]:
+            lines.append(f"`{i}` ✗ {it['url']}\n　 {it['error']}")
+            continue
+        mark = (status or {}).get(i - 1, "")
+        dup = f"  ⚠️ 중복: 기존 '{it['registered_as']}'" if it["registered_as"] else ""
+        taken = "  ⚠️ 같은 이름 있음" if it["name_taken"] and not it["registered_as"] else ""
+        lines.append(f"`{i}` {mark}**{it['title']}** ({it['count']}개){dup}{taken}")
+    text = "\n".join(lines)
+    return text if len(text) <= 3900 else text[:3900] + "\n…"
+
+
+class AddPacksView(discord.ui.View):
+    def __init__(self, items, owner_id):
+        super().__init__(timeout=600)
+        self.items, self.owner_id = items, owner_id
+        self.policy = "skip"
+        valid = [(i, it) for i, it in enumerate(items) if it["ok"]]
+        self.chosen = {i for i, _ in valid}
+        self.pick = discord.ui.Select(
+            placeholder="등록할 팩 고르기 (처음엔 전부 선택)", min_values=0, max_values=len(valid),
+            options=[discord.SelectOption(label=f"{i + 1}. {it['title']}"[:100], value=str(i), default=True,
+                                          description=(f"{it['count']}개" + ("  · 중복" if it["registered_as"] else ""))[:100])
+                     for i, it in valid], row=0)
+        self.pick.callback = self.on_pick
+        self.add_item(self.pick)
+        if any(it["registered_as"] for _, it in valid):
+            self.dup = discord.ui.Select(
+                placeholder="중복된 팩 처리", min_values=1, max_values=1, row=1,
+                options=[discord.SelectOption(label=label, value=key, default=(key == "skip"))
+                         for key, (label, _) in DUP_POLICIES.items()])
+            self.dup.callback = self.on_dup
+            self.add_item(self.dup)
+        go = discord.ui.Button(label="등록", style=discord.ButtonStyle.success, row=2)
+        go.callback = self.on_go
+        stop = discord.ui.Button(label="취소", style=discord.ButtonStyle.secondary, row=2)
+        stop.callback = self.on_cancel
+        self.add_item(go)
+        self.add_item(stop)
+
+    async def _mine(self, inter):
+        return inter.user.id == self.owner_id and await allowed(inter)
+
+    async def on_pick(self, inter):
+        if not await self._mine(inter):
+            return
+        self.chosen = {int(v) for v in self.pick.values}
+        for opt in self.pick.options:  # 메시지를 다시 그려도 고른 상태가 유지되도록
+            opt.default = int(opt.value) in self.chosen
+        await inter.response.defer()
+
+    async def on_dup(self, inter):
+        if not await self._mine(inter):
+            return
+        self.policy = self.dup.values[0]
+        for opt in self.dup.options:
+            opt.default = opt.value == self.policy
+        await inter.response.defer()
+
+    async def on_cancel(self, inter):
+        if await self._mine(inter):
+            self.stop()
+            await inter.response.edit_message(content="팩 추가를 취소했습니다.", embed=None, view=None,
+                                              delete_after=NOTICE_SECONDS)
+
+    async def on_go(self, inter):
+        if not await self._mine(inter):
+            return
+        targets = sorted(self.chosen)
+        if not targets:
+            return await reply(inter, "등록할 팩을 하나 이상 고르세요.", fade=True)
+        self.stop()
+        opt = DUP_POLICIES[self.policy][1]
+        status = {i: "⏳ " for i in targets}
+        embed = discord.Embed(title=f"팩 {len(targets)}개 등록 중…", color=0xFFC940,
+                              description=_bulk_lines(self.items, status))
+        await inter.response.edit_message(content=None, embed=embed, view=None)
+        done = skipped = failed = 0
+        for n, i in enumerate(targets, 1):
+            it = self.items[i]
+            if it["registered_as"] and opt is None:
+                status[i] = "⏭️ 건너뜀 · "
+                skipped += 1
+            else:
+                replace, keep = opt if it["registered_as"] else (False, False)
+                try:
+                    count = await asyncio.to_thread(core.add_pack, it["url"], it["title"], inter.user.name, replace, keep)
+                    status[i] = f"✅ {count}개 · " if not replace else f"✅ 덮어씀 {count}개 · "
+                    done += 1
+                except core.UserError as err:
+                    status[i] = f"✗ {err} · "
+                    failed += 1
+            embed.title = f"팩 등록 중… {n}/{len(targets)}"
+            embed.description = _bulk_lines(self.items, status)
+            try:
+                await inter.edit_original_response(embed=embed)
+            except discord.HTTPException:  # 15분이 지나 수정할 수 없게 돼도 등록은 계속한다
+                pass
+        embed.title = f"완료: 등록 {done} · 건너뜀 {skipped} · 실패 {failed}"
+        embed.color = 0x7ACB68 if not failed else 0xF4589C
+        try:
+            await inter.edit_original_response(embed=embed)
+        except discord.HTTPException:
+            pass
+
+
+@e.command(name="add-packs", description=f"카카오 이모티콘 팩 여러 개 한꺼번에 추가 (최대 {BULK_MAX}개)")
+@app_commands.rename(urls="카카오주소들")
+@app_commands.describe(urls="주소들을 띄어쓰기로 이어서 붙여넣기 (제목은 자동으로 읽어옴)")
+async def cmd_add_packs(inter: discord.Interaction, urls: str):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    raw = core.split_urls(urls)
+    if not raw:
+        raise core.UserError("카카오 이모티콘 주소를 넣어 주세요.")
+    if len(raw) > BULK_MAX:
+        raise core.UserError(f"한 번에 {BULK_MAX}개까지 넣을 수 있습니다 (지금 {len(raw)}개). 나눠서 넣거나 웹에서 등록하세요.")
+
+    gate = asyncio.Semaphore(4)  # 카카오에 한꺼번에 너무 많이 요청하지 않게
+
+    async def one(u):
+        try:
+            async with gate:
+                return {"ok": True, **await asyncio.to_thread(core.kakao_preview, u)}
+        except core.UserError as err:
+            return {"ok": False, "url": u, "error": str(err)}
+
+    items, seen = [], set()
+    for it in await asyncio.gather(*(one(u) for u in raw)):
+        if it["ok"] and it["url"] in seen:  # 같은 주소를 두 번 넣은 경우
+            continue
+        seen.add(it.get("url"))
+        items.append(it)
+    valid = [it for it in items if it["ok"]]
+    dups = sum(1 for it in valid if it["registered_as"])
+    embed = discord.Embed(title=f"팩 {len(valid)}개를 불러왔습니다", color=0xFFC940, description=_bulk_lines(items))
+    tips = ["아래 메뉴에서 등록할 팩을 고르고 **등록**을 누르세요. 이름은 카카오 제목을 그대로 씁니다."]
+    if dups:
+        tips.append(f"⚠️ 같은 주소의 팩이 이미 있는 것이 {dups}개 있습니다. '중복된 팩 처리'에서 방법을 고르세요 (기본: 건너뛰기).")
+    embed.add_field(name="안내", value="\n".join(tips), inline=False)
+    if not valid:
+        return await inter.followup.send(embed=embed, ephemeral=True)
+    await inter.followup.send(embed=embed, view=AddPacksView(items, inter.user.id), ephemeral=True)
 
 
 @e.command(name="add", description="이모티콘 1개 추가")
 @app_commands.rename(ename="이모티콘이름", image="이미지", image_url="이미지주소", name="이름", groups="그룹", tags="태그")
-@app_commands.describe(ename="보낼 때 쓸 이름 (공백 없이)", image="이미지 올리기 (끌어놓기·붙여넣기 가능)",
+@app_commands.describe(ename="보낼 때 쓸 이름", image="이미지 올리기 (끌어놓기·붙여넣기 가능)",
                        image_url="이미지를 올리지 않았다면 이미지 주소", name="묶음 이름 (비우면 이모티콘이름과 같게)",
                        groups="등록된 그룹 중에서 선택 (쉼표로 여러 개)", tags="등록된 태그 중에서 선택 (쉼표로 여러 개)")
 async def cmd_add(inter: discord.Interaction, ename: str, image: discord.Attachment | None = None,
@@ -567,7 +771,8 @@ HELP = discord.Embed(title="이모티콘 봇 사용법", color=0xFFC940, descrip
     "**/e send** 이름 일부를 입력하면 자동완성 목록에서 골라 바로 보냅니다.\n"
     "**/e pick** 디스코드 안에서 그룹을 고르면 번호 격자가 나오고, 번호를 누르면 바로 보내집니다.\n"
     "**/e find** 웹 갤러리 링크를 받습니다. 그룹을 고르거나 검색해서 이미지를 누르면 이 채널에 보내집니다 (14분 동안).\n"
-    "**/e add-pack** 카카오 이모티콘 주소와 팩 이름으로 팩을 통째로 추가합니다.\n"
+    "**/e add-pack** 카카오 이모티콘 주소를 넣으면 제목을 읽어와 확인 후 팩을 통째로 추가합니다.\n"
+    "**/e add-packs** 주소 여러 개(최대 25개)를 띄어쓰기로 이어 붙여 한꺼번에 추가합니다.\n"
     "**/e add** 이미지 1개를 추가합니다. 그룹·태그는 등록된 것 중에서 고릅니다.\n"
     "**/e del-pack** 이름·태그·그룹 기준으로 여러 개를 삭제합니다.\n"
     "**/e del** 이모티콘 1개, 또는 태그·그룹 이름만 삭제합니다.\n"
